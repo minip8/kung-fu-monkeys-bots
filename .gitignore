@@ -4,3 +4,5 @@
 # modules are rebuilt by the recipe, never committed.
 /out/
 /examples/**/*.wasm
+# The ladder service's build (service/README.md).
+/service/target/
