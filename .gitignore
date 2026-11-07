@@ -1,0 +1,5 @@
+# The engine's kfm_arena and its build (tools/fetch_kfm_arena.sh, tools/build_kfm_arena.sh).
+/.kfm/
+# Local builds: modules are rebuilt by tools/build.sh, never committed.
+/out/
+/examples/**/*.wasm
