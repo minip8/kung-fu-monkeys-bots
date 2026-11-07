@@ -36,7 +36,7 @@ differ (`ladder.env.example` marks each line `[ladder]` or `[build]`):
 
 | Role | Container | Gets |
 |---|---|---|
-| `serve` (+ `migrate` before it) | unprivileged user, read-only root, no capabilities, host network on loopback | the database, the portal's URL, the session key, both OAuth clients, the object store, Sentry |
+| `serve` (+ `migrate` before it) | unprivileged user, read-only root, no capabilities, host network on loopback | the database, the portal's URL, the session key, both OAuth clients, the object store, Sentry, the ladder's optional settings (rounds, replay retention, the presigning limit, `KFM_LADDER_TRUST_PROXY`, the privacy contact) |
 | `worker match` | the same, plus a 768 MiB memory cap and a process cap | the database, the object store, Sentry |
 | `worker build` | root, `--runtime runc`, the Docker socket and `/var/lib/kfm-ladder/build` mounted | the database, the object store, Sentry, `KFM_BUILD_IMAGE`, `KFM_LADDER_BUILD_DIR` |
 
@@ -128,8 +128,10 @@ the same path inside and outside (`KFM_LADDER_BUILD_DIR`, and `TMPDIR` too).
      season create 2026-12 --start 2026-12-01T00:00:00Z --end 2027-01-01T00:00:00Z
    sudo docker run --rm --network host --env-file /etc/kfm/ladder.env ghcr.io/minip8/kfm-ladder:v0.1.0 season list
    ```
-   The API's scheduler then makes a round every `KFM_LADDER_ROUND_SECONDS` (default 300) and
-   the match workers play it.
+   The API's scheduler then makes a round every `KFM_LADDER_ROUND_SECONDS` (default 1800) and
+   the match workers play it. It also deletes replays older than `KFM_LADDER_REPLAY_HOURS`
+   (default 24) from the bucket every 10 minutes; the matches themselves stay. The bucket
+   therefore holds about a day of replays: at the defaults, 20 teams make 2 880 a day.
 10. **Automatic updates.** The engine's `deploy/gcp/setup_deploy_identity.sh`, run from an
     engine checkout for this repository, adds a second provider to the same pool and service
     account (its first provider admits only the engine repository):

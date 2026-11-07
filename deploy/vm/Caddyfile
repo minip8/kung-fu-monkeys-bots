@@ -9,5 +9,9 @@
 		max_size 8MB
 	}
 	encode zstd gzip
-	reverse_proxy 127.0.0.1:8090
+	reverse_proxy 127.0.0.1:8090 {
+		# The client's address, replacing whatever the client sent: the service trusts the
+		# first entry for its per-client rate limit (KFM_LADDER_TRUST_PROXY=1).
+		header_up X-Forwarded-For {remote_host}
+	}
 }
