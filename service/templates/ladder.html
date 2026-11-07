@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Kung Fu Monkeys ladder: {{ title }}{% endblock %}
+{% block content %}
+<h1>Ladder</h1>
+{% if let Some(season) = season %}
+<p class="sub">Season <strong>{{ season.name }}</strong>, {{ season.window }}{% if season.current %} (current){% else %} (frozen at its end){% endif %}, mode <code>{{ season.mode }}</code>. Glicko-2 ratings with their deviation; engine release {{ engine_tag }}.</p>
+{% else %}
+<p class="sub">No season has begun yet.</p>
+{% endif %}
+{% if seasons.len() > 1 %}
+<p class="seasons">Seasons: {% for s in seasons %}{% if s.selected %}<strong>{{ s.name }}</strong>{% else %}<a href="/ladder?season={{ s.query }}">{{ s.name }}</a>{% endif %}{% endfor %}</p>
+{% endif %}
+<section>
+{% if rows.is_empty() %}<p class="muted">No team has played in this season yet.</p>
+{% else %}
+<div class="scroll"><table>
+  <tr><th class="num">#</th><th>Team</th><th class="num">Rating</th><th class="num">RD</th><th class="num">Games</th><th class="num">W</th><th class="num">D</th><th class="num">L</th><th>Module</th></tr>
+  {% for r in rows %}
+  <tr><td class="num">{{ r.rank }}</td><td>{{ r.name }}</td><td class="num">{{ r.rating }}</td><td class="num">{{ r.rd }}</td><td class="num">{{ r.games }}</td><td class="num">{{ r.wins }}</td><td class="num">{{ r.draws }}</td><td class="num">{{ r.losses }}</td><td>{% if !r.hash.is_empty() %}<code title="SHA-256 of the active module">{{ r.hash }}</code>{% endif %}</td></tr>
+  {% endfor %}
+</table></div>
+{% endif %}
+<p class="pages">{% if let Some(url) = prev %}<a href="{{ url }}">previous</a>{% endif %}{% if let Some(url) = next %}<a href="{{ url }}">next</a>{% endif %}</p>
+</section>
+<p class="muted">Teams are paired every round with up to a few neighbours by rating, each pair played from both sides; a draw or a game the tick cap ended counts half.</p>
+{% endblock %}

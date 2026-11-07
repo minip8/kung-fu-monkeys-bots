@@ -18,6 +18,7 @@ pub mod error;
 pub mod extract;
 pub mod glicko;
 pub mod jobs;
+pub mod ladder;
 pub mod manifest;
 pub mod match_worker;
 pub mod oauth;
@@ -85,6 +86,9 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/seasons", get(seasons::list_route))
+        .route("/ladder", get(ladder::ladder_route))
+        .route("/matches", get(ladder::matches_route))
+        .route("/matches/{id}", get(ladder::match_route))
         .route("/me", get(users::me))
         .route("/tokens", get(tokens::list).post(tokens::create))
         .route("/tokens/{id}", delete(tokens::revoke))

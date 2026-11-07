@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Kung Fu Monkeys ladder: {{ title }}{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+<p class="sub">{% if !season.is_empty() %}Season {{ season }}, {% endif %}{% if !round.is_empty() %}round {{ round }}, {% endif %}game {{ game }} of the pair, played {{ when }} with engine release <code>{{ engine_tag }}</code>.</p>
+<section>
+  <h2>{{ outcome }}</h2>
+  <div class="scroll"><table>
+    <tr><th>Side</th><th>Team</th><th class="num">Score</th><th class="num">Kills</th><th class="num">Deaths</th><th class="num">Rating</th><th>Faults</th></tr>
+    {% for s in sides %}
+    <tr><td>{{ s.label }}</td><td>{% if s.won %}<strong>{{ s.name }}</strong>{% else %}{{ s.name }}{% endif %}</td><td class="num">{{ s.score }}</td><td class="num">{{ s.kills }}</td><td class="num">{{ s.deaths }}</td><td class="num">{{ s.change }}</td>
+      <td>{% if s.faults.is_empty() %}<span class="muted">none</span>{% else %}{% for f in s.faults %}<span class="bad">{{ f }}</span><br>{% endfor %}{% endif %}</td></tr>
+    {% endfor %}
+  </table></div>
+  <p class="muted">{{ ending }}. A fault in a ranked game (a trap, an over-budget tick, a bad return, a dead module) is recorded and counted on the submission; the engine played "repeat last input" for those ticks.</p>
+</section>
+<section>
+  <h2>Replay</h2>
+  {% if let Some(url) = replay_url %}
+  <p><a href="{{ url }}">Download the replay (.kfmr)</a> (the link is valid for an hour).
+  {% if let Some(viewer) = viewer_url %}<a href="{{ viewer }}">Watch it in the {{ engine_tag }} client</a> (replay viewing arrives with the client's replay viewer).{% endif %}</p>
+  <p class="muted">Re-run it bit for bit with the {{ engine_tag }} release's kfm_arena: seed {{ seed }}, {{ ticks }} ticks, content {{ content_hash }}, build {{ build_hash }}.</p>
+  {% else %}<p class="muted">No replay is stored.</p>{% endif %}
+</section>
+<section>
+  <h2>Result</h2>
+  <p class="muted">The match object kfm_arena printed (the engine's docs/arena-result.md).</p>
+  <pre>{{ result }}</pre>
+</section>
+{% endblock %}

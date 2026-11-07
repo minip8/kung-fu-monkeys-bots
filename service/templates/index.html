@@ -1,42 +1,5 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kung Fu Monkeys ladder</title>
-<style>
-  :root { --fg: #1d1b16; --muted: #6b6457; --bg: #fbf8f1; --card: #fff; --line: #e4ddcd; --accent: #c8761a; --bad: #a8321e; --good: #2f6b2a; }
-  @media (prefers-color-scheme: dark) {
-    :root { --fg: #efe9dc; --muted: #a59d8d; --bg: #17150f; --card: #211e17; --line: #3a3428; --accent: #f0a040; --bad: #f08060; --good: #8fcf7f; }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
-  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
-  h1 { font-size: 1.6rem; margin: 0 0 4px; }
-  h2 { font-size: 1.15rem; margin: 0 0 12px; }
-  p.sub { color: var(--muted); margin: 0 0 24px; }
-  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 0 0 16px; }
-  table { width: 100%; border-collapse: collapse; font-size: .95rem; }
-  th, td { text-align: left; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
-  th { color: var(--muted); font-weight: 600; }
-  form.inline { display: inline; margin: 0; }
-  form.row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
-  input[type=text], select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); min-width: 0; flex: 1 1 160px; }
-  button, a.button { font: inherit; padding: 6px 12px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; text-decoration: none; display: inline-block; }
-  button.quiet { background: transparent; color: var(--accent); }
-  .error { border-color: var(--bad); color: var(--bad); }
-  .notice { border-color: var(--good); color: var(--good); }
-  code.secret { display: block; padding: 8px; margin: 8px 0; background: var(--bg); border: 1px dashed var(--accent); border-radius: 6px; word-break: break-all; }
-  .muted { color: var(--muted); }
-  .signin a.button { margin: 0 8px 8px 0; }
-  .team { margin: 0 0 16px; }
-  h3 { font-size: 1rem; margin: 16px 0 6px; }
-  .good { color: var(--good); }
-  input[type=file] { font: inherit; min-width: 0; flex: 1 1 200px; }
-</style>
-</head>
-<body>
-<main>
+{% extends "base.html" %}
+{% block content %}
 <h1>Kung Fu Monkeys ladder</h1>
 <p class="sub">Bots built from source and ranked in the <code>contest</code> mode. Engine release {{ engine_tag }}.</p>
 
@@ -115,6 +78,17 @@
       <button type="submit">Add member</button>
     </form>
     {% endif %}
+    <h3>Ladder</h3>
+    {% if team.rating.is_empty() %}<p class="muted">Not rated in the current season yet: once a ready submission is active, the scheduler pairs the team in its next round.</p>
+    {% else %}<p>{{ team.rating }} <a href="/ladder">ladder</a></p>{% endif %}
+    {% if !team.matches.is_empty() %}
+    <div class="scroll"><table>
+      <tr><th>Played</th><th>Opponent</th><th>Result</th><th class="num">Score</th><th class="num">Rating</th><th></th></tr>
+      {% for m in team.matches %}
+      <tr><td>{{ m.when }}</td><td>{{ m.opponent }}</td><td>{{ m.outcome }}{% if m.faulted %} <span class="bad">fault</span>{% endif %}</td><td class="num">{{ m.score }}</td><td class="num">{{ m.change }}</td><td><a href="/matches/{{ m.id }}">match</a></td></tr>
+      {% endfor %}
+    </table></div>
+    {% endif %}
     <h3>Submissions</h3>
     {% if team.submissions.is_empty() %}<p class="muted">No submissions yet.</p>
     {% else %}
@@ -123,7 +97,7 @@
       {% for s in team.submissions %}
       <tr>
         <td>{{ s.created }}<br><span class="muted">entry {{ s.entry }}</span></td>
-        <td>{{ s.state }}{% if s.is_active %} <strong class="good">active</strong>{% endif %}{% if !s.error.is_empty() %}<br><span class="muted">{{ s.error }}</span>{% endif %}</td>
+        <td>{{ s.state }}{% if s.is_active %} <strong class="good">active</strong>{% endif %}{% if !s.error.is_empty() %}<br><span class="muted">{{ s.error }}</span>{% endif %}{% if s.ranked_games > 0 %}<br><span class="muted">{{ s.ranked_games }} ranked game(s), {{ s.ranked_faults }} with a fault</span>{% endif %}</td>
         <td>{% if !s.hash.is_empty() %}<code title="SHA-256 of the module">{{ s.hash }}</code>{% endif %}</td>
         <td>{% if s.has_log %}<a href="/submissions/{{ s.id }}/log">log</a>{% endif %}</td>
         <td>{% if s.is_ready && !s.is_active %}<form class="inline" method="post" action="/portal/teams/{{ team.id }}/active">
@@ -157,6 +131,4 @@
   <a class="button" href="/auth/google">Sign in with Google</a>
 </section>
 {% endif %}
-</main>
-</body>
-</html>
+{% endblock %}

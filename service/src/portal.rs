@@ -20,9 +20,13 @@ use uuid::Uuid;
 use crate::auth::{MaybeSession, Session};
 use crate::error::{ApiError, ApiResult, AppError, AppResult, ErrorCode};
 use crate::extract::{ApiPath, FormBody};
+use crate::ladder::{self, LadderQuery, MatchDetail, MatchSummary};
 use crate::oauth::Provider;
 use crate::tokens::{self, Scope};
-use crate::{manifest, submissions, teams, users, AppState};
+use crate::{manifest, seasons, submissions, teams, users, AppState};
+
+/// The games a team's section lists.
+const RECENT_MATCHES: i64 = 10;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -75,6 +79,20 @@ struct SubmissionView {
     has_log: bool,
     is_ready: bool,
     is_active: bool,
+    ranked_games: i32,
+    ranked_faults: i32,
+}
+
+/// One of a team's recent games, from the team's side.
+struct MatchLine {
+    id: Uuid,
+    when: String,
+    opponent: String,
+    outcome: &'static str,
+    /// The team's score, then the opponent's.
+    score: String,
+    change: String,
+    faulted: bool,
 }
 
 struct TeamView {
@@ -84,6 +102,9 @@ struct TeamView {
     is_owner: bool,
     members: Vec<MemberView>,
     submissions: Vec<SubmissionView>,
+    /// The current season's standing as a line, or empty.
+    rating: String,
+    matches: Vec<MatchLine>,
 }
 
 struct UserView {
@@ -109,6 +130,32 @@ struct IndexPage {
     notice: Option<String>,
     new_token: Option<NewTokenView>,
     engine_tag: String,
+}
+
+/// A rating change for display: `+12.3`, `-4.0`.
+fn change(delta: f64) -> String {
+    format!("{delta:+.1}")
+}
+
+fn match_line(m: &MatchSummary, team: Uuid) -> MatchLine {
+    let (mine, theirs) = if m.sides[0].team_id == team {
+        (&m.sides[0], &m.sides[1])
+    } else {
+        (&m.sides[1], &m.sides[0])
+    };
+    MatchLine {
+        id: m.id,
+        when: when(m.created_at),
+        opponent: theirs.name.clone(),
+        outcome: match m.winner {
+            None => "draw",
+            Some(w) if w == team => "won",
+            Some(_) => "lost",
+        },
+        score: format!("{}–{}", mine.score, theirs.score),
+        change: change(mine.rating_change),
+        faulted: mine.faults.as_array().is_some_and(|f| !f.is_empty()),
+    }
 }
 
 fn when(at: OffsetDateTime) -> String {
@@ -178,9 +225,23 @@ async fn user_view(state: &AppState, session: &Session) -> AppResult<UserView> {
                 has_log: row.log_key.is_some(),
                 is_ready: row.state == "ready",
                 is_active: row.active,
+                ranked_games: row.ranked_games,
+                ranked_faults: row.ranked_faults,
                 state: row.state,
             })
             .collect();
+        let rating = team
+            .rating
+            .as_ref()
+            .map(|r| {
+                format!(
+                    "Season {}: rank {}, rating {} ± {}, {} game(s): {} won, {} drawn, {} lost.",
+                    r.season, r.rank, r.rating, r.rd, r.games, r.wins, r.draws, r.losses
+                )
+            })
+            .unwrap_or_default();
+        let (recent, _) = ladder::list_matches(db, Some(team.id), None, 1, RECENT_MATCHES).await?;
+        let matches = recent.iter().map(|m| match_line(m, team.id)).collect();
         team_views.push(TeamView {
             id: team.id,
             name: team.name,
@@ -197,6 +258,8 @@ async fn user_view(state: &AppState, session: &Session) -> AppResult<UserView> {
                 })
                 .collect(),
             submissions,
+            rating,
+            matches,
         });
     }
     Ok(UserView {
@@ -211,7 +274,7 @@ async fn user_view(state: &AppState, session: &Session) -> AppResult<UserView> {
 
 /// A portal page: HTML, never cached (it may show a token's secret), framed by
 /// nobody, and no scripts.
-fn page(status: StatusCode, html: String) -> Response {
+fn page_response(status: StatusCode, html: String) -> Response {
     let mut response = (status, html).into_response();
     let headers = response.headers_mut();
     for (name, value) in [
@@ -250,7 +313,7 @@ async fn render(
     }
     .render()
     .map_err(AppError::internal)?;
-    Ok(page(StatusCode::OK, html))
+    Ok(page_response(StatusCode::OK, html))
 }
 
 #[derive(Deserialize)]
@@ -499,4 +562,220 @@ async fn activate(
         }
         .await,
     )
+}
+
+struct SeasonLine {
+    name: String,
+    mode: String,
+    window: String,
+    current: bool,
+}
+
+struct SeasonLink {
+    name: String,
+    /// The name, URL-encoded for `?season=`.
+    query: String,
+    selected: bool,
+}
+
+struct StandingView {
+    rank: i64,
+    name: String,
+    rating: i64,
+    rd: i64,
+    games: i32,
+    wins: i32,
+    draws: i32,
+    losses: i32,
+    hash: String,
+}
+
+#[derive(Template)]
+#[template(path = "ladder.html")]
+struct LadderPage {
+    title: String,
+    season: Option<SeasonLine>,
+    seasons: Vec<SeasonLink>,
+    rows: Vec<StandingView>,
+    prev: Option<String>,
+    next: Option<String>,
+    engine_tag: String,
+}
+
+fn encode(text: &str) -> String {
+    url::form_urlencoded::byte_serialize(text.as_bytes()).collect()
+}
+
+/// `GET /ladder` for a browser: the board of a season, paged, with links to
+/// the other seasons.
+pub async fn ladder_page(state: &AppState, query: &LadderQuery) -> AppResult<Response> {
+    let page = ladder::page_param(query.page.as_deref())?;
+    let season = ladder::season_param(&state.db, query.season.as_deref()).await?;
+    let now = seasons::db_now(&state.db).await?;
+    let all = seasons::list(&state.db).await?;
+    let (rows, more) = match &season {
+        Some(s) => ladder::standings(&state.db, s.id, page, ladder::LADDER_PAGE).await?,
+        None => (Vec::new(), false),
+    };
+    let link = |p: i64| {
+        let mut url = format!("/ladder?page={p}");
+        if let Some(s) = &season {
+            url.push_str("&season=");
+            url.push_str(&encode(&s.name));
+        }
+        url
+    };
+    let html = LadderPage {
+        title: season
+            .as_ref()
+            .map_or_else(|| "no season".to_owned(), |s| s.name.clone()),
+        seasons: all
+            .iter()
+            .map(|s| SeasonLink {
+                name: s.name.clone(),
+                query: encode(&s.name),
+                selected: season.as_ref().is_some_and(|c| c.id == s.id),
+            })
+            .collect(),
+        season: season.as_ref().map(|s| SeasonLine {
+            name: s.name.clone(),
+            mode: s.mode.clone(),
+            window: format!("{} to {}", when(s.starts_at), when(s.ends_at)),
+            current: s.holds(now),
+        }),
+        rows: rows
+            .into_iter()
+            .map(|r| StandingView {
+                rank: r.rank,
+                name: r.name,
+                rating: r.rating,
+                rd: r.rd,
+                games: r.games,
+                wins: r.wins,
+                draws: r.draws,
+                losses: r.losses,
+                hash: r
+                    .module_hash
+                    .map(|h| h.chars().take(12).collect())
+                    .unwrap_or_default(),
+            })
+            .collect(),
+        prev: (page > 1).then(|| link(page - 1)),
+        next: more.then(|| link(page + 1)),
+        engine_tag: state.config.engine_tag.clone(),
+    }
+    .render()
+    .map_err(AppError::internal)?;
+    Ok(page_response(StatusCode::OK, html))
+}
+
+struct SideView {
+    label: &'static str,
+    name: String,
+    won: bool,
+    score: i32,
+    kills: i32,
+    deaths: i32,
+    change: String,
+    faults: Vec<String>,
+}
+
+#[derive(Template)]
+#[template(path = "match.html")]
+struct MatchPage {
+    title: String,
+    season: String,
+    round: String,
+    game: i16,
+    when: String,
+    engine_tag: String,
+    outcome: String,
+    ending: &'static str,
+    sides: Vec<SideView>,
+    replay_url: Option<String>,
+    viewer_url: Option<String>,
+    seed: i64,
+    ticks: i32,
+    content_hash: String,
+    build_hash: String,
+    result: String,
+}
+
+fn fault_line(fault: &serde_json::Value) -> String {
+    let n = |k: &str| {
+        fault
+            .get(k)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    let mut parts = Vec::new();
+    for key in ["traps", "over", "bad"] {
+        if n(key) > 0 {
+            parts.push(format!("{key} {}", n(key)));
+        }
+    }
+    if let Some(dead) = fault.get("dead").and_then(serde_json::Value::as_str) {
+        parts.push(format!("dead ({dead})"));
+    }
+    format!("slot {}: {}", n("slot"), parts.join(", "))
+}
+
+/// `GET /matches/{m}` for a browser: the game's sides, its replay links and
+/// its raw result.
+pub fn match_page(detail: &MatchDetail) -> AppResult<Response> {
+    let m = &detail.summary;
+    let outcome = match m.winner {
+        None => "A draw".to_owned(),
+        Some(w) => {
+            let name = m
+                .sides
+                .iter()
+                .find(|s| s.team_id == w)
+                .map_or("?", |s| s.name.as_str());
+            format!("{name} won")
+        }
+    };
+    let html = MatchPage {
+        title: format!("{} v {}", m.sides[0].name, m.sides[1].name),
+        season: m.season.clone().unwrap_or_default(),
+        round: m.round.map(|r| r.to_string()).unwrap_or_default(),
+        game: m.game + 1,
+        when: when(m.created_at),
+        engine_tag: m.engine_tag.clone(),
+        outcome,
+        ending: if m.end == "cap" {
+            "The tick cap ended the game, so it counts as a draw"
+        } else {
+            "The game ended"
+        },
+        sides: m
+            .sides
+            .iter()
+            .zip(["A", "B"])
+            .map(|(s, label)| SideView {
+                label,
+                name: format!("{} (team {})", s.name, s.team),
+                won: m.winner == Some(s.team_id),
+                score: s.score,
+                kills: s.kills,
+                deaths: s.deaths,
+                change: change(s.rating_change),
+                faults: s
+                    .faults
+                    .as_array()
+                    .map(|f| f.iter().map(fault_line).collect())
+                    .unwrap_or_default(),
+            })
+            .collect(),
+        replay_url: detail.replay_url.clone(),
+        viewer_url: detail.viewer_url.clone(),
+        seed: m.seed,
+        ticks: m.ticks,
+        content_hash: detail.content_hash.clone(),
+        build_hash: detail.build_hash.clone().unwrap_or_default(),
+        result: serde_json::to_string_pretty(&detail.result).map_err(AppError::internal)?,
+    }
+    .render()
+    .map_err(AppError::internal)?;
+    Ok(page_response(StatusCode::OK, html))
 }
