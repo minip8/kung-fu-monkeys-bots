@@ -1,0 +1,121 @@
+name: Release
+
+# The ladder's release (architecture §11 "M7 step 3 design (v0.63)"; runbook in
+# deploy/README.md): on a v* tag of this repository the two images go to GHCR, then the VMs
+# are updated. A manual run from a branch pushes images tagged sha-<short> (no `latest`) and
+# touches no VM.
+#   kfm-ladder     deploy/Dockerfile.ladder: the service with the kfm_arena of engine.lock's
+#                  tag= baked in (the build fails while tag= is empty)
+#   kfm-bot-build  Dockerfile: the bot build image the build worker runs every submission in
+#                  (docs/build.md); the build worker uses the one of its own release
+#
+# The `vms` job ships deploy/vm to each VM of KFM_LADDER_VMS over an IAP SSH tunnel and runs
+# update.sh TAG, which restarts the service's units at once (a job in flight is re-queued
+# when its claim goes stale). VMs are taken in the order of KFM_LADDER_VMS, so list the
+# ladder VM first: its API runs the migrations before the build worker gets the new release.
+# It authenticates with Workload Identity Federation (no key in the repository; the engine's
+# deploy/gcp/setup_deploy_identity.sh run for this repository creates the provider and prints
+# the variables, deploy/README.md "Updating"). Without KFM_LADDER_VMS the job is skipped and
+# the VMs are updated by hand.
+#
+# Repository settings it reads:
+#   variables  KFM_LADDER_VMS    the VMs to update, "name:zone ..." ladder VM first
+#                                (e.g. "kfm-ladder-1:australia-southeast1-b kfm-build-1:australia-southeast1-b")
+#              GCP_PROJECT_ID    the GCP project of the VMs
+#              GCP_WORKLOAD_IDENTITY_PROVIDER  the provider's full resource name
+#              GCP_DEPLOY_SERVICE_ACCOUNT      the deploy service account's email
+#   secrets    GITHUB_TOKEN (automatic): GHCR
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  images:
+    name: image ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: kfm-ladder,    dockerfile: deploy/Dockerfile.ladder }
+          - { image: kfm-bot-build, dockerfile: Dockerfile }
+    steps:
+      - uses: actions/checkout@v7
+      - name: Image name and tags
+        id: meta
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"   # GHCR names are lower case
+          name="ghcr.io/$owner/${{ matrix.image }}"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            tags="$name:$GITHUB_REF_NAME,$name:latest"
+          else
+            tags="$name:sha-${GITHUB_SHA::7}"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  vms:
+    name: update the VMs
+    needs: images
+    if: github.ref_type == 'tag' && vars.KFM_LADDER_VMS != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write   # the OIDC token Workload Identity Federation exchanges
+    steps:
+      - uses: actions/checkout@v7
+      - uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Ship deploy/vm and run update.sh on every VM
+        env:
+          KFM_LADDER_VMS: ${{ vars.KFM_LADDER_VMS }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # OS Login names the runner's user after the service account; the
+          # key gcloud generates for this run is registered to its profile.
+          ssh=(gcloud compute ssh --quiet --tunnel-through-iap
+               --ssh-flag=-o --ssh-flag=ServerAliveInterval=30)
+          for vm in $KFM_LADDER_VMS; do
+            name="${vm%%:*}"; zone="${vm#*:}"
+            [[ -n "$name" && -n "$zone" && "$name" != "$zone" ]] \
+              || { echo "::error::KFM_LADDER_VMS entry '$vm' is not name:zone"; exit 1; }
+            echo "::group::$name ($zone)"
+            tar czf - --owner=0 --group=0 -C deploy vm \
+              | "${ssh[@]}" "$name" --zone "$zone" --command \
+                  'sudo rm -rf /opt/kfm-ladder-deploy/vm && sudo mkdir -p /opt/kfm-ladder-deploy && sudo tar xzf - -C /opt/kfm-ladder-deploy'
+            "${ssh[@]}" "$name" --zone "$zone" --command \
+              "sudo /opt/kfm-ladder-deploy/vm/update.sh '$TAG'"
+            echo "::endgroup::"
+          done
