@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Kung Fu Monkeys ladder: privacy{% endblock %}
+{% block content %}
+<h1>Privacy</h1>
+<p class="sub">How the Kung Fu Monkeys bot ladder handles your data. Last changed {{ date }}.</p>
+
+<section>
+<h2>Who runs it</h2>
+<p>The ladder is run by its operator, the maintainer of the Kung Fu Monkeys bots project, and
+can be reached at
+{% match contact_href %}{% when Some with (href) %}<a href="{{ href }}">{{ contact }}</a>{% when None %}{{ contact }}{% endmatch %}.
+The service's source code is public at
+<a href="https://github.com/minip8/kung-fu-monkeys-bots">github.com/minip8/kung-fu-monkeys-bots</a>,
+so everything below can be checked against what it does.</p>
+</section>
+
+<section>
+<h2>What is stored and why</h2>
+<ul>
+<li><strong>Your sign-in identity.</strong> When you sign in with GitHub or Google, the service
+stores the provider's account id for you (GitHub's numeric user id, Google's subject id) and
+the name and email address the provider reports. The account id is what signs you in; the
+name and email are shown only to you (on the portal and through the API). Your display name,
+taken from the provider's name when you first sign in, is public as a member of your teams.
+None of it is used for anything else, and the service sends no email.</li>
+<li><strong>Sessions and API tokens.</strong> A portal session is a cookie; the service stores
+only a hash of it, and a session ends after {{ session_idle_days }} days without use or when
+you sign out. API tokens (for the <code>kfm</code> command line tool) are stored only as
+hashes, with their name, scope and when they were last used.</li>
+<li><strong>Teams.</strong> Team names, their members and each member's role (public).</li>
+<li><strong>Submissions.</strong> The source archive you upload, the module built from it and
+the build log, in the object store. The source and log of a team's older submissions are
+deleted (the five most recent finished ones and the active one are kept); built modules are
+kept so recorded games can be re-run.</li>
+<li><strong>Ranked games.</strong> The result of each game (the teams, the submissions that
+played, scores, the seed, the faults of each bot) and the ratings it moved. These are public:
+they are the ladder. {% if replay_hours == 0 %}This deployment keeps every game's replay
+file.{% else %}A game's replay file is deleted {{ replay_hours }} hours after the game.{% endif %}</li>
+<li><strong>Backups.</strong> A nightly copy of the database is kept in the object store for a
+limited time (30 days in the standard deployment).</li>
+</ul>
+</section>
+
+<section>
+<h2>What is not</h2>
+<p>No password (sign-in goes through GitHub or Google), no payment data, no analytics or
+tracking scripts, no advertising. The portal sets only its own sign-in cookies.</p>
+</section>
+
+<section>
+<h2>IP addresses</h2>
+<p>Your IP address is seen by the web server in front of the service, which may keep it in its
+logs, and by the service's rate limiter, which counts requests per address in memory only.
+The service does not store IP addresses in its database.</p>
+</section>
+
+<section>
+<h2>Other services involved</h2>
+<ul>
+<li>GitHub and Google, for signing in, when you choose them.</li>
+<li>Cloudflare R2, which stores the files (sources, modules, logs, replays, backups).</li>
+<li>Sentry, for error reports, when enabled.</li>
+<li>Google Cloud, which hosts the service and its database, in Australia.</li>
+</ul>
+</section>
+
+<section>
+<h2>Deleting your data</h2>
+<p>Unlinking a sign-in provider and deleting an account are not self-service yet. To have your
+account, identities, tokens or teams deleted, ask the operator at the contact above. The
+results of ranked games already played stay part of the ladder's record.</p>
+</section>
+{% endblock %}

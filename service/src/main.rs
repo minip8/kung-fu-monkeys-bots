@@ -252,7 +252,8 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     let settings = scheduler::SchedulerSettings::new(
         Duration::from_secs(config.round_seconds),
         config.round_opponents,
-    );
+    )
+    .with_replay_hours(Store::new(&config.s3)?, config.replay_hours);
     let scheduler = tokio::spawn(scheduler::run(pool.clone(), settings, stopped.clone()));
     let state = AppState::new(pool, config);
     let mut http_stop = stopped;

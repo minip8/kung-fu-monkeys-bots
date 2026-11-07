@@ -19,14 +19,15 @@ there first.
 | `src/auth.rs` | Session cookies, the `Caller` extractor (session or bearer), CSRF. |
 | `src/cli_login.rs`, `templates/cli.html` | The `kfm` CLI's login (API v1.3, §5.1): the confirmation page, the one-time code, its exchange for a token. |
 | `src/tokens.rs`, `src/teams.rs`, `src/users.rs` | The JSON routes and the functions the portal shares. |
-| `src/portal.rs`, `templates/` | The portal (askama, no JavaScript; `base.html` is the layout). |
+| `src/portal.rs`, `templates/` | The portal (askama, no JavaScript; `base.html` is the layout, its footer links `/privacy`, `templates/privacy.html`). |
 | `src/submissions.rs`, `src/manifest.rs`, `src/archive.rs` | Uploads (the manifest, the zip's checks and unpacking), listing, activation. |
 | `src/store.rs` | The object store (the S3 API through `rust-s3`, path-style): put, get, delete, presigned GET. |
 | `src/jobs.rs`, `src/worker.rs` | The job queue (claim, heartbeat, retry, sweep) and the worker loop. |
 | `src/builder.rs`, `src/wasm.rs`, `src/arena.rs` | The build worker: the sandbox run, the module's load checks, the smoke match. |
-| `src/retention.rs` | Pruning sources and logs past five finished submissions. |
+| `src/retention.rs` | Pruning sources and logs past five finished submissions, and replays past `KFM_LADDER_REPLAY_HOURS` (API v1.4). |
+| `src/presign_limit.rs` | The per-client token bucket of the routes that presign (`GET /matches/{m}`, `GET /submissions/{s}`; API v1.4). |
 | `src/seasons.rs` | Seasons (non-overlapping windows), the `season` subcommand's functions, `GET /seasons`. |
-| `src/scheduler.rs` | The rounds: eligibility, the pairing, the seeds, the advisory-locked loop in `serve`. |
+| `src/scheduler.rs` | The rounds: eligibility, the pairing, the seeds, the advisory-locked loop in `serve` (which also sweeps old replays). |
 | `src/match_worker.rs` | The match worker: the `kfm_arena` run of a pair, its result parsed, games, replays and ratings recorded. |
 | `src/glicko.rs` | Glicko-2 and the release widening. |
 | `src/ladder.rs`, `templates/ladder.html`, `templates/match.html` | `GET /ladder`, `GET /matches`, `GET /matches/{m}`, a team's standing; their portal pages. |
@@ -64,7 +65,7 @@ holds no portal secret; `serve` the set marked for it.
 |---|---|---|---|---|
 | `DATABASE_URL` | all | yes | `postgres://kfm:pw@127.0.0.1:5432/kfm` | Postgres. |
 | `KFM_LADDER_LISTEN` | serve | no | `127.0.0.1:8090` (default) | Plain-HTTP listen address; `/healthz` answers here. |
-| `KFM_LADDER_PUBLIC_URL` | serve | yes | `https://ladder.kfm.minip8.com` | The public origin (no path): OAuth redirect URIs, absolute links, and `Secure` cookies when https. |
+| `KFM_LADDER_PUBLIC_URL` | serve | yes | `https://bots.kfm.minip8.com` | The public origin (no path): OAuth redirect URIs, absolute links, and `Secure` cookies when https. |
 | `KFM_LADDER_SESSION_KEY` | serve | yes | 64 hex characters (`openssl rand -hex 32`) | The HMAC-SHA256 key of the session and OAuth state cookies. Rotating it signs everyone out. |
 | `KFM_LADDER_GITHUB_CLIENT_ID` | serve | yes | | The GitHub OAuth App. |
 | `KFM_LADDER_GITHUB_CLIENT_SECRET` | serve | yes | | |
@@ -77,9 +78,13 @@ holds no portal secret; `serve` the set marked for it.
 | `KFM_LADDER_S3_REGION` | serve, workers | yes | `auto` (R2) | |
 | `KFM_LADDER_ENGINE_TAG` | serve, workers | yes | `v0.5.1` | The engine release the season runs (`vX.Y.Z`); the image sets it from its build. |
 | `KFM_LADDER_ARENA` | workers | yes | `/opt/kfm/engine/kfm_arena` | The `kfm_arena` binary of `KFM_LADDER_ENGINE_TAG`: validation's smoke match and the ranked matches. The image sets it. |
-| `KFM_LADDER_ROUND_SECONDS` | serve | no | `300` (default) | A scheduler round is due when the current season's last round is this old (1 s to 7 days). |
+| `KFM_LADDER_ROUND_SECONDS` | serve | no | `1800` (default) | A scheduler round is due when the current season's last round is this old (1 s to 7 days). Every game writes a replay to the store: a round every 5 minutes with 20 teams writes 17 k replays a day, hence half an hour. |
 | `KFM_LADDER_ROUND_OPPONENTS` | serve | no | `3` (default) | k: the most pairs a team is in per round (1 to 16). |
 | `KFM_LADDER_VIEWER_URL` | serve | no | `https://kfm.minip8.com` (default) | The engine page's origin: a match's `viewer_url` is `<this>/<tag>/?replay=<url>`. |
+| `KFM_LADDER_REPLAY_HOURS` | serve | no | `24` (default) | A game's replay object is deleted once the game is this many hours old (0 to 87600; 0 keeps replays forever); its `replay_url` and `viewer_url` are `null` from then on, the match row stays. |
+| `KFM_LADDER_PRESIGN_PER_MINUTE` | serve | no | `60` (default) | Requests a minute per client IP to `GET /matches/{m}` and `GET /submissions/{s}`, which presign (0 to 100000; 0 turns the limit off); past it, `429 rate_limited` with `Retry-After`. |
+| `KFM_LADDER_TRUST_PROXY` | serve | no | `1` behind Caddy; unset (`0`) by default | `1`: the client IP of the limit is the first `X-Forwarded-For` entry. Set it only when a proxy you run is the sole way in and sets that header (the Caddyfile does): otherwise any client picks its own address. |
+| `KFM_LADDER_CONTACT` | serve | no | `https://github.com/minip8/kung-fu-monkeys-bots/issues` (default) | How to reach the operator, as `/privacy` shows it: a URL (linked), an email address (a `mailto:` link) or a line of text. |
 | `KFM_LADDER_MATCH_TICKS` | worker match | no | `36000` (default) | The tick cap of each ranked game (1 to 216000); a capped game is a draw. |
 | `KFM_BUILD_IMAGE` | worker build | yes | `ghcr.io/minip8/kfm-bot-build:v0.1.0` | The bot build image each build runs in. |
 | `KFM_LADDER_BUILD_DIR` | worker build | yes | `/var/lib/kfm-ladder/build` | An absolute directory at the same path on the host and in the worker's container, under which each job makes `job-<id>/src` and `job-<id>/out` for the sibling `docker run` (removed after the job). |
@@ -180,6 +185,18 @@ and queues one `match` job per pair. Of several `serve` instances only the one h
 Postgres advisory lock schedules (the log says `holding the lock; this instance schedules`, the
 others `another instance holds the lock; idle`). For a quick local loop set
 `KFM_LADDER_ROUND_SECONDS=10`.
+
+The lock holder also prunes replays (API v1.4 §10.6): at start and then every 10 minutes it
+deletes the replay object of every game older than `KFM_LADDER_REPLAY_HOURS` (default 24),
+200 matches at a time, and clears their `replay_key`s; the log says `replay retention: replays
+pruned` with the counts. A failed delete leaves its key for the next sweep. The match rows,
+their results, seeds, submissions and rating changes are kept forever, and modules are never
+deleted, so a pruned game can still be re-run with its release's `kfm_arena`.
+
+`GET /matches/{m}` and `GET /submissions/{s}` hand out presigned URLs, so each client IP may
+call them `KFM_LADDER_PRESIGN_PER_MINUTE` times a minute (default 60, a shared token bucket in
+the API's memory); behind Caddy set `KFM_LADDER_TRUST_PROXY=1` so the client is the forwarded
+address rather than Caddy's loopback.
 
 `kfm-ladder worker match` claims the jobs and plays each pair with `kfm_arena` from both sides
 (`--matches 2 --rotate`, each module in all five slots of its team), then records two games,

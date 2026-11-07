@@ -4,10 +4,18 @@
 //! and their keys. A module is never deleted (every recorded match stays
 //! reproducible from seed plus modules), queued and building submissions are
 //! never touched, and the row itself stays.
+//!
+//! Replays (API v1.4) are kept for `KFM_LADDER_REPLAY_HOURS` (default 24):
+//! [`prune_replays`] deletes the replay object of every older game and then
+//! clears its `replay_key`; the match row keeps everything else (result,
+//! seed, both submissions, the ratings it moved), so the game stays
+//! reproducible from its seed and modules. The scheduler's loop runs it every
+//! [`REPLAY_SWEEP_EVERY`] under its advisory lock, so one process prunes.
 
 use std::collections::HashSet;
+use std::time::Duration;
 
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -15,6 +23,75 @@ use crate::store::Store;
 
 /// Finished submissions kept per team, besides the active one.
 pub const KEEP: usize = 5;
+
+/// How often the scheduler's loop prunes replays.
+pub const REPLAY_SWEEP_EVERY: Duration = Duration::from_secs(10 * 60);
+/// Matches looked at per batch of a replay sweep: one UPDATE per batch.
+pub const REPLAY_BATCH: i64 = 200;
+
+/// What one replay sweep did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReplayPrune {
+    /// Replays deleted (a missing object counts) and their keys cleared.
+    pub deleted: u64,
+    /// Replays whose delete failed: their keys stay for the next sweep.
+    pub failed: u64,
+}
+
+/// Deletes the replay of every game recorded more than `older_than` ago
+/// (judged on the database's clock), oldest first in batches of
+/// [`REPLAY_BATCH`]: each batch's objects are deleted from the store one by
+/// one (a missing object counts as deleted), then the keys of those deleted
+/// are cleared in one UPDATE. A failed delete leaves its key, so the next
+/// sweep tries again and a row never names an object that may be gone.
+pub async fn prune_replays(
+    conn: &mut PgConnection,
+    store: &Store,
+    older_than: Duration,
+) -> Result<ReplayPrune, sqlx::Error> {
+    let mut done = ReplayPrune::default();
+    // Keyset paging: a failed key stays behind the cursor, not in the way.
+    let mut after: Option<(OffsetDateTime, Uuid)> = None;
+    loop {
+        let batch: Vec<(Uuid, OffsetDateTime, String)> = sqlx::query_as(
+            "SELECT id, created_at, replay_key FROM matches \
+             WHERE replay_key IS NOT NULL AND created_at < now() - make_interval(secs => $1) \
+               AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3::uuid)) \
+             ORDER BY created_at, id LIMIT $4",
+        )
+        .bind(older_than.as_secs_f64())
+        .bind(after.map(|(at, _)| at))
+        .bind(after.map(|(_, id)| id))
+        .bind(REPLAY_BATCH)
+        .fetch_all(&mut *conn)
+        .await?;
+        let Some((last_id, last_at, _)) = batch.last() else {
+            break;
+        };
+        after = Some((*last_at, *last_id));
+        let mut deleted = Vec::with_capacity(batch.len());
+        for (id, _, key) in &batch {
+            match store.delete(key).await {
+                Ok(()) => deleted.push(*id),
+                Err(err) => {
+                    done.failed += 1;
+                    tracing::warn!(%key, error = %err, "replay retention: delete failed; kept for the next sweep");
+                }
+            }
+        }
+        if !deleted.is_empty() {
+            sqlx::query("UPDATE matches SET replay_key = NULL WHERE id = ANY($1)")
+                .bind(&deleted)
+                .execute(&mut *conn)
+                .await?;
+            done.deleted += deleted.len() as u64;
+        }
+        if (batch.len() as i64) < REPLAY_BATCH {
+            break;
+        }
+    }
+    Ok(done)
+}
 
 /// The finished submissions to prune: all but the `KEEP` most recent (by
 /// creation, then id) and never `active`.

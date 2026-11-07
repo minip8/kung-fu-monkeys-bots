@@ -1,17 +1,18 @@
-# Kung Fu Monkeys ladder API v1.3
+# Kung Fu Monkeys ladder API v1.4
 
 Status: normative, append-only from v1.0 (2026-11-07, M7 step 3a, engine architecture v0.63);
 v1.1 (2026-11-07, M7 step 3b) serves submissions; v1.2 (2026-11-07, M7 step 4) serves seasons,
 the scheduler's matches, the ratings and the ladder (§10); v1.3 (2026-11-07, M7 step 5) serves
-the `kfm` CLI's login (§5.1).
+the `kfm` CLI's login (§5.1); v1.4 (2026-11-07) keeps replays for 24 hours (§10.6), limits
+the routes that presign per client (§2) and serves the privacy page (§8).
 The design and its rationale are the engine's `docs/architecture.md` §8 "The ladder" and §11
 "M7 step 3 design". This file is the HTTP surface shared by the service (`service/`, the
 `kfm-ladder` binary), its portal and the `kfm` command line tool; change it here first. Every
-route below is served as of v1.3.
+route below is served as of v1.4.
 
 ## 1. Transport and conventions
 
-- HTTPS in production (`https://ladder.kfm.minip8.com`, Caddy in front of the service); plain
+- HTTPS in production (`https://bots.kfm.minip8.com`, Caddy in front of the service); plain
   HTTP on `127.0.0.1` in development. Every path below is relative to that origin.
 - Requests with a body send `Content-Type: application/json` (the portal's forms excepted, §8);
   a body that is not JSON, or JSON without a required key or with a key of the wrong type, is
@@ -64,7 +65,7 @@ The service never puts internals (SQL, a provider's reply, a path) in either. Co
 | `not_ready` | 409 | Only a `ready` submission can be made active (v1.1). |
 | `invalid_code` | 400 | A CLI login code that is malformed, unknown, already exchanged or expired (v1.3, §5.1). |
 | `too_large` | 413 | An upload is over its cap: 4 MiB of `source.zip` (v1.1). |
-| `rate_limited` | 429 | A team submits at most once a minute (v1.1). |
+| `rate_limited` | 429 | A team submits at most once a minute (v1.1); a client asked for presigned links too often (v1.4, below). |
 | `oauth_failed` | 502 | The provider's reply could not be obtained or verified (token exchange, profile, id token). |
 | `internal` | 500 | A failure on the service's side; logged, never detailed. |
 
@@ -73,6 +74,19 @@ The codes are append-only (§11): a client must treat an unknown code by its sta
 For `bad_manifest` and `bad_source` the `message` is the code's sentence followed by the
 detail, as in `The source archive is refused: "../x.c" contains a .. component.`; it is still
 display text, not a contract.
+
+**The presigning limit (v1.4).** The routes that hand out presigned object store URLs,
+`GET /matches/{m}` (§10.6, its JSON and its HTML page alike) and `GET /submissions/{s}`
+(§9.5), share one token bucket per client IP: `KFM_LADDER_PRESIGN_PER_MINUTE` requests a minute
+(default 60; 0 turns the limit off), refilled continuously at that rate, so a burst of 60 is
+allowed and then one a second. A request without a token answers `429` with the error shape
+(`{"error":"rate_limited","message":…}`, JSON even where the route would answer HTML) and a
+`Retry-After` header: the whole seconds until the next token. The limit is checked before
+authentication, so a refused request was not authenticated either. The client IP is the TCP
+peer, or the first `X-Forwarded-For` entry when the service runs behind a proxy it trusts
+(`KFM_LADDER_TRUST_PROXY=1`; Caddy sets the header in production); IPv6 clients share a bucket
+per /64. The buckets are in the API process's memory: a restart refills them. A client
+polling a submission every 3 seconds, as the CLI does, stays well under the limit.
 
 ## 3. Authentication
 
@@ -329,6 +343,7 @@ The portal is the same service rendered as HTML (askama templates, no JavaScript
 | Method and path | What |
 |---|---|
 | `GET /` | Signed out: sign in with GitHub or Google. Signed in: the account and its identities (a link button for the provider not yet linked), tokens (create, revoke), teams (create, add member, leave or remove) and each team's submissions (upload, the list with state, module hash, error, ranked games and faults and a link to the log, an Activate button on ready ones, the active one marked; v1.1), its standing in the current season and its last ten games with links to their pages (v1.2). Shows `?error=<code>` as the code's message (with the `&detail=` text for `bad_manifest` and `bad_source`, v1.1) and `?linked=<provider>` as a notice. |
+| `GET /privacy` | The privacy page (v1.4): who runs the service (`KFM_LADDER_CONTACT`), what it stores and why, what it does not, IP addresses, the third parties, how to have data deleted. Public; every portal page's footer links to it. |
 | `GET /ladder` | With `Accept: text/html` (a browser): the board of §10.5 as a page, paged, with links to every season (v1.2). |
 | `GET /matches/{m}` | With `Accept: text/html`: the game's page: both sides with score, kills, deaths, rating change and faults, the replay's download link, the viewer link, the seed and hashes to re-run it, and the raw result (v1.2). |
 | `POST /portal/tokens` | Form `csrf`, `name`, `scope`: creates a token and renders `/` with its secret, once. |
@@ -423,7 +438,7 @@ starting `the build could not be completed:` or `the validate could not be compl
 | `language` | string | always | The manifest's language, normalised (`"cpp"`). |
 | `entry` | string | always | The manifest's entry, normalised (`"."` for the root). |
 | `module_hash` | string or null | always | The SHA-256 of the built module, 64 lower-case hex digits, once built (a `rejected` submission has one too). |
-| `log_url` | string or null | always | A presigned URL of the build and validation log on the object store, valid for 15 minutes from the response; `null` before a log exists and once retention pruned it (§9.7). |
+| `log_url` | string or null | always | A presigned URL of the build and validation log on the object store, valid for 15 minutes from the response; `null` before a log exists and once retention pruned it (§9.7). The route that shows it is under the presigning limit (§2, v1.4). |
 | `error` | string or null | always | Why it is `failed` or `rejected`, one line for a person; `null` otherwise. |
 | `active` | bool | always | Whether it is its team's active submission. |
 | `ranked_games` | number | always | Ranked games it played (v1.2, §10.3). |
@@ -435,7 +450,7 @@ starting `the build could not be completed:` or `the validate could not be compl
 |---|---|---|---|
 | `POST /teams/{t}/submissions` | submit, a member of `t` | `multipart/form-data` with the parts `manifest.toml` (§9.1) and `source.zip` (§9.2) | `202`, the submission (`queued`). |
 | `GET /teams/{t}/submissions` | any, a member of `t` | | `200 {"submissions":[<submission>…]}`, newest first. |
-| `GET /submissions/{s}` | any, a member of its team | | `200`, the submission. |
+| `GET /submissions/{s}` | any, a member of its team | | `200`, the submission. Under the presigning limit (§2, v1.4): `429 rate_limited` with `Retry-After`. |
 | `GET /submissions/{s}/log` | any, a member of its team | | `200`, the log as `text/plain; charset=utf-8`. |
 | `POST /teams/{t}/active` | submit, a member of `t` | `{"submission":"<id>"}` | `200`, the submission, now `active`. |
 
@@ -465,7 +480,7 @@ An upload with `curl`, as the CLI's `submit` sends it:
 
 ```sh
 curl -H "Authorization: Bearer $KFM_TOKEN" -F manifest.toml=@manifest.toml -F source.zip=@bot.zip \
-  https://ladder.kfm.minip8.com/teams/$TEAM/submissions
+  https://bots.kfm.minip8.com/teams/$TEAM/submissions
 ```
 
 ### 9.6 Build and validation
@@ -554,7 +569,9 @@ ending with a letter or digit, unique; a mode is 1 to 32 characters of `a-z`, `0
 schedules: it holds a Postgres session advisory lock (`pg_try_advisory_lock`) on a connection
 of its own and makes rounds over that connection only; the others stay idle until it goes. A
 **round** is due once the current season's last round is `KFM_LADDER_ROUND_SECONDS` old
-(default 300, judged on the database's clock, so a restart neither skips nor doubles one).
+(default 1800, judged on the database's clock, so a restart neither skips nor doubles one;
+v1.4, from 300: every game writes a replay to the object store, and a round every 5 minutes
+with 20 teams writes 17 k replays a day).
 Rounds are numbered from 1 within a season. A round:
 
 1. takes every team whose active submission is `ready` (§9.3) and sorts them by their rating
@@ -681,8 +698,24 @@ match object:
 |---|---|---|---|
 | `content_hash`, `build_hash` | string, string or null | always | The result's two hashes (8 hex digits). |
 | `result` | object | always | The match object `kfm_arena` printed, whole (the engine's `docs/arena-result.md`; its specs are `<submission>.wasm`). |
-| `replay_url` | string or null | always | A presigned URL of the `.kfmr` on the object store, valid for one hour from the response. |
-| `viewer_url` | string or null | always | `<KFM_LADDER_VIEWER_URL>/<engine_tag>/?replay=<replay_url, URL-encoded>`: the replay in the client of the game's own release (`https://kfm.minip8.com/v0.5.1/?replay=…`). |
+| `replay_url` | string or null | always | A presigned URL of the `.kfmr` on the object store, valid for one hour from the response; `null` once the replay is pruned, 24 hours after the game by default (below, v1.4). |
+| `viewer_url` | string or null | always | `<KFM_LADDER_VIEWER_URL>/<engine_tag>/?replay=<replay_url, URL-encoded>`: the replay in the client of the game's own release (`https://kfm.minip8.com/v0.5.1/?replay=…`); `null` when `replay_url` is. |
+
+`GET /matches/{m}` is under the presigning limit (§2, v1.4): `429 rate_limited` with
+`Retry-After`, for its HTML page too.
+
+**Replay retention (v1.4).** A replay is kept for `KFM_LADDER_REPLAY_HOURS` after its game
+was recorded (default 24; 0 keeps replays forever). The match itself is kept forever: its
+result, seed, engine release, both submissions (whose modules are never deleted, §9.7) and
+the ratings it moved stay, so a pruned game can still be re-run with that release's
+`kfm_arena`; only the `.kfmr` object goes, and with it `replay_url` and `viewer_url`, which
+answer `null` from then on (the portal's page drops its replay links). The scheduling instance
+(§10.2) sweeps every 10 minutes under its advisory lock, so one process prunes: the games
+older than the retention that still have a replay, oldest first, 200 at a time, each object
+deleted from the store (a missing object counts as deleted) and then the batch's keys cleared
+in one update. A delete that fails keeps its key, and the next sweep tries again, so a
+replay may outlive its 24 hours by a sweep or more, never the other way. Download a replay you
+want to keep (`kfm replay get`, or the link) within the day.
 
 The viewer itself is the browser client's replay-by-URL feature, M7 step 6: until it lands
 the link opens the release's page without playing the replay. The client fetches the replay
@@ -705,6 +738,7 @@ then.
 | v1.1 | Submissions served (§9): the upload, list, show, log and activate routes, the manifest and archive rules, the states, build and validation, retention; the team object's `active`; the codes `bad_manifest`, `bad_source`, `too_large`, `rate_limited`, `not_ready`; the portal's upload and activate forms. Refined from the reserved shapes: the upload answers `202` with the whole submission (not `201` with three keys: nothing is built yet), the submission object adds `updated_at`, `language` and `entry`, and the list is what retention keeps (in-flight ones included, pruned ones left out). |
 | v1.2 | Seasons, the scheduler, the match job, ratings and the board served (§10): `GET /seasons`, `GET /ladder`, `GET /matches`, `GET /matches/{m}` and their portal pages; the team object's `rating`; the submission object's `ranked_games` and `ranked_faults`; `kfm-ladder season create|list`. Refined from the reserved shapes: the board's rows are `rank`, `rd` (not `deviation`), the record and the active module's hash, with `page` beside `next`; a match is one game of a pair's two-game run, with its sides, faults and rating changes; `GET /ladder` and `GET /matches/{m}` answer HTML to a browser. |
 | v1.3 | The `kfm` CLI's login (§5.1): `GET /auth/cli`, `POST /auth/cli`, `POST /auth/cli/exchange`; a sign-in start's `?next=` (the CLI page only); the code `invalid_code`; `DELETE /tokens/{id}` with that token as the bearer (a token revokes itself); `GET /seasons`' `engine_tag`. |
+| v1.4 | Replay retention (§10.6): a game's replay is deleted 24 hours after it was recorded (`KFM_LADDER_REPLAY_HOURS`), after which its `replay_url` and `viewer_url` are `null`; the match row stays. The presigning limit (§2): `GET /matches/{m}` and `GET /submissions/{s}` answer `429 rate_limited` with `Retry-After` past 60 requests a minute per client IP (`KFM_LADDER_PRESIGN_PER_MINUTE`, `KFM_LADDER_TRUST_PROXY`). The round interval's default becomes 1800 seconds (§10.2). The portal's `GET /privacy` page (§8). The production origin is `https://bots.kfm.minip8.com`. |
 
 ## 12. Configuration of the binary
 
@@ -717,6 +751,8 @@ hand is done. Configuration is the environment only, per role: `migrate` and `se
 public URL or the listen address; `worker build` also needs `KFM_BUILD_IMAGE`,
 `KFM_LADDER_BUILD_DIR` (an absolute path) and `KFM_LADDER_ARENA`, and `worker match` needs
 `KFM_LADDER_ARENA` (and may set `KFM_LADDER_MATCH_TICKS`); `serve` needs the full set and may set
-`KFM_LADDER_ROUND_SECONDS`, `KFM_LADDER_ROUND_OPPONENTS` and `KFM_LADDER_VIEWER_URL`. A missing or
+`KFM_LADDER_ROUND_SECONDS`, `KFM_LADDER_ROUND_OPPONENTS`, `KFM_LADDER_VIEWER_URL`,
+`KFM_LADDER_REPLAY_HOURS`, `KFM_LADDER_PRESIGN_PER_MINUTE`, `KFM_LADDER_TRUST_PROXY` and
+`KFM_LADDER_CONTACT` (v1.4). A missing or
 malformed required variable exits 2 with a line naming it. The variables, their defaults and
 the roles that read them are listed in `service/README.md`.

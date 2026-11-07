@@ -508,22 +508,47 @@ pub fn config(public_url: &str, fake: &Fake) -> Config {
         round_seconds: 300,
         round_opponents: 3,
         viewer_url: "https://kfm.minip8.com".to_owned(),
+        replay_hours: 24,
+        // Off: tests poll GET /submissions/{s} faster than 60 a minute. The
+        // limit's own tests turn it on (start_configured).
+        presign_per_minute: 0,
+        trust_proxy: false,
+        contact: kfm_ladder::config::DEFAULT_CONTACT.to_owned(),
         sentry_dsn: None,
     }
 }
 
 /// The service over `db`, with `extra` routes merged in (tests' probes).
 pub async fn start_with(db: PgPool, extra: Router<AppState>) -> TestApp {
+    start_full(db, extra, |_| {}).await
+}
+
+/// The service over `db` with its [`config`] changed by `edit`.
+pub async fn start_configured(db: PgPool, edit: impl FnOnce(&mut Config)) -> TestApp {
+    start_full(db, Router::new(), edit).await
+}
+
+async fn start_full(
+    db: PgPool,
+    extra: Router<AppState>,
+    edit: impl FnOnce(&mut Config),
+) -> TestApp {
     let fake = start_fake().await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr: SocketAddr = listener.local_addr().unwrap();
     let base = format!("http://{addr}");
-    let state = AppState::new(db.clone(), config(&base, &fake));
+    let mut config = config(&base, &fake);
+    edit(&mut config);
+    let state = AppState::new(db.clone(), config);
     if test_s3().is_some() {
         state.store.ensure_bucket().await.unwrap();
     }
     let store = (*state.store).clone();
-    let router = kfm_ladder::routes().merge(extra).with_state(state.clone());
+    // Served as `kfm_ladder::serve` does: with the peer addresses.
+    let router = kfm_ladder::routes()
+        .merge(extra)
+        .with_state(state.clone())
+        .into_make_service_with_connect_info::<SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     TestApp {
         base,
