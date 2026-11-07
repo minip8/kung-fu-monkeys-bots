@@ -43,10 +43,13 @@ x-ladder: &ladder
     KFM_LADDER_PUBLIC_URL: http://127.0.0.1:8090
     # 64 hex characters of "kfm-ladder-dev-key-not-a-secret.": development only.
     KFM_LADDER_SESSION_KEY: 6b666d2d6c61646465722d6465762d6b65792d6e6f742d612d7365637265742e
-    KFM_LADDER_GITHUB_CLIENT_ID: ${KFM_LADDER_GITHUB_CLIENT_ID:-}
-    KFM_LADDER_GITHUB_CLIENT_SECRET: ${KFM_LADDER_GITHUB_CLIENT_SECRET:-}
-    KFM_LADDER_GOOGLE_CLIENT_ID: ${KFM_LADDER_GOOGLE_CLIENT_ID:-}
-    KFM_LADDER_GOOGLE_CLIENT_SECRET: ${KFM_LADDER_GOOGLE_CLIENT_SECRET:-}
+    # The service requires the OAuth settings to serve; the placeholders start it, and sign-in
+    # works once the four are exported from real apps registered with http://127.0.0.1:8090
+    # callbacks (service/README.md).
+    KFM_LADDER_GITHUB_CLIENT_ID: ${KFM_LADDER_GITHUB_CLIENT_ID:-dev-github-client-id}
+    KFM_LADDER_GITHUB_CLIENT_SECRET: ${KFM_LADDER_GITHUB_CLIENT_SECRET:-dev-github-client-secret}
+    KFM_LADDER_GOOGLE_CLIENT_ID: ${KFM_LADDER_GOOGLE_CLIENT_ID:-dev-google-client-id}
+    KFM_LADDER_GOOGLE_CLIENT_SECRET: ${KFM_LADDER_GOOGLE_CLIENT_SECRET:-dev-google-client-secret}
     KFM_LADDER_S3_ENDPOINT: http://127.0.0.1:9000
     KFM_LADDER_S3_BUCKET: kfm-ladder
     KFM_LADDER_S3_ACCESS_KEY: kfm-dev
