@@ -8,7 +8,10 @@ name: CI
 # clippy and tests (service/README.md) against a postgres:17 service container, a MinIO started
 # in a step (the object store tests), the bot build image built on the runner and the released
 # kfm_arena (the build worker's end-to-end tests: a real sandbox build, validation and the
-# smoke match).
+# smoke match). cli: the kfm command line tool's format, clippy and tests (cli/README.md
+# "Development"): against its fake ladder, and with the bot build image, the runner's emsdk clang
+# and the released kfm_arena for the toolchain tests (kfm build of examples/, in the image and
+# with --local byte for byte, and kfm test of the result).
 
 on:
   push:
@@ -168,3 +171,43 @@ jobs:
         run: cargo clippy --manifest-path service/Cargo.toml --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --manifest-path service/Cargo.toml --locked
+
+  cli:
+    runs-on: ubuntu-26.04
+    env:
+      CARGO_TERM_COLOR: always
+      KFM_TEST_BUILD_IMAGE: kfm-bot-build:local
+      KFM_TEST_ARENA: ${{ github.workspace }}/.kfm/kfm_arena
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the bot build image
+        run: docker build -t kfm-bot-build:local .
+      - uses: mymindstorm/setup-emsdk@v16
+        with:
+          version: 6.0.13 # the emsdk of the Dockerfile's base image
+      - name: The emsdk clang for kfm build --local
+        run: echo "CLANG=$(dirname "$(command -v emcc)")/../bin/clang" >> "$GITHUB_ENV"
+      - uses: actions/cache@v6
+        with:
+          path: .kfm/kfm_arena
+          key: kfm_arena-${{ runner.os }}-${{ hashFiles('engine.lock', 'tools/build_kfm_arena.sh') }}
+      - name: Get kfm_arena
+        run: |
+          if grep -q '^tag=.' engine.lock; then tools/fetch_kfm_arena.sh
+          elif [[ ! -x .kfm/kfm_arena ]]; then
+            sudo apt-get update && sudo apt-get install -y cmake ninja-build
+            tools/build_kfm_arena.sh
+          fi
+          .kfm/kfm_arena --help | head -n 1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: Format
+        run: cargo fmt --check --manifest-path cli/Cargo.toml
+      - name: Clippy
+        run: cargo clippy --manifest-path cli/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --manifest-path cli/Cargo.toml --locked -- --nocapture
