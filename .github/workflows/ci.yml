@@ -5,7 +5,10 @@ name: CI
 # without docker (tools/build.sh with the same emsdk) are byte-identical to the sandbox's.
 # play: every sandbox-built module plays against the reference bot without a fault. A
 # repository without examples/*/ passes with a notice. service: the ladder service's format,
-# clippy and tests (service/README.md) against a postgres:17 service container.
+# clippy and tests (service/README.md) against a postgres:17 service container, a MinIO started
+# in a step (the object store tests), the bot build image built on the runner and the released
+# kfm_arena (the build worker's end-to-end tests: a real sandbox build, validation and the
+# smoke match).
 
 on:
   push:
@@ -109,8 +112,50 @@ jobs:
       # #[sqlx::test] creates (and drops) one database per test on this server.
       DATABASE_URL: postgres://postgres:dev@127.0.0.1:5432/postgres
       CARGO_TERM_COLOR: always
+      KFM_LADDER_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      KFM_LADDER_TEST_BUILD_IMAGE: kfm-bot-build:local
+      KFM_LADDER_ARENA: ${{ github.workspace }}/.kfm/kfm_arena
+      KFM_LADDER_TEST_EXAMPLES: ${{ github.workspace }}/out/local
     steps:
       - uses: actions/checkout@v7
+      # A service container cannot be given MinIO's `server` argument, so it starts here (the
+      # compose file's image and credentials).
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER=kfm-dev -e MINIO_ROOT_PASSWORD=kfm-dev-secret \
+            pgsty/minio:RELEASE.2026-08-04T00-00-00Z server /data
+          for _ in $(seq 60); do
+            curl -fs http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          docker logs minio
+          exit 1
+      # The image job builds the same image; building it again here is simpler than shipping
+      # 3.5 GB between jobs, and the emsdk base layer is the bulk of it either way.
+      - name: Build the bot build image
+        run: docker build -t kfm-bot-build:local .
+      - name: Build the examples (for the module walker's test)
+        run: |
+          shopt -s nullglob
+          mkdir -p out/local
+          for d in examples/*/; do
+            name="$(basename "$d")"
+            KFM_BUILD_IMAGE=kfm-bot-build:local tools/build_in_sandbox.sh "$d" "out/sandbox/$name"
+            cp "out/sandbox/$name/bot.wasm" "out/local/$name.wasm"
+          done
+      - uses: actions/cache@v6
+        with:
+          path: .kfm/kfm_arena
+          key: kfm_arena-${{ runner.os }}-${{ hashFiles('engine.lock', 'tools/build_kfm_arena.sh') }}
+      - name: Get kfm_arena
+        run: |
+          if grep -q '^tag=.' engine.lock; then tools/fetch_kfm_arena.sh
+          elif [[ ! -x .kfm/kfm_arena ]]; then
+            sudo apt-get update && sudo apt-get install -y cmake ninja-build
+            tools/build_kfm_arena.sh
+          fi
+          .kfm/kfm_arena --help | head -n 1
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
