@@ -13,6 +13,7 @@ pub mod db;
 pub mod error;
 pub mod extract;
 pub mod oauth;
+pub mod portal;
 pub mod teams;
 pub mod tokens;
 pub mod users;
@@ -75,6 +76,7 @@ pub fn routes() -> Router<AppState> {
             delete(teams::remove_member_route),
         )
         .merge(oauth::routes())
+        .merge(portal::routes())
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
 }
