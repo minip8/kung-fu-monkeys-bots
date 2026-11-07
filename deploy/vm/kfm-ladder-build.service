@@ -15,6 +15,11 @@
 # The build directory is bind-mounted at the same path inside and outside the container: the
 # worker names its subdirectories in the sandbox's -v SRC:/src:ro -v OUT:/out, and the daemon
 # resolves those paths on the host. TMPDIR points there too.
+#
+# On stop the worker claims nothing more and finishes the job in hand: a build is capped at
+# 180 s on the worker's clock (the sandbox's 120 s plus the container's start), a validation's
+# smoke match takes seconds, so `docker stop` waits 200 s before it kills; a job killed anyway
+# goes stale and is re-queued.
 [Unit]
 Description=Kung Fu Monkeys ladder build worker
 Documentation=https://github.com/minip8/kung-fu-monkeys-bots/blob/main/deploy/README.md
@@ -37,11 +42,11 @@ ExecStart=/usr/bin/docker run --rm --name kfm-ladder-build --network host --runt
     -e KFM_LADDER_S3_ENDPOINT -e KFM_LADDER_S3_BUCKET -e KFM_LADDER_S3_ACCESS_KEY \
     -e KFM_LADDER_S3_SECRET_KEY -e KFM_LADDER_S3_REGION -e SENTRY_DSN \
     ${KFM_IMAGE_REPO}/kfm-ladder:${KFM_IMAGE_TAG} worker build
-ExecStop=/usr/bin/docker stop -t 150 kfm-ladder-build
+ExecStop=/usr/bin/docker stop -t 200 kfm-ladder-build
 Restart=always
 RestartSec=5
 TimeoutStartSec=300
-TimeoutStopSec=180
+TimeoutStopSec=230
 
 [Install]
 WantedBy=multi-user.target
