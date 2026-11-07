@@ -180,6 +180,41 @@ next reboot; to make them permanent, recreate the VM (or update its startup-scri
 Logs: `journalctl -u kfm-ladder-api -u 'kfm-ladder-match@*' -u kfm-postgres -u caddy` on the
 ladder VM, `journalctl -u kfm-ladder-build` on the build VM.
 
+## Releasing the CLI
+
+The same `v*` tag releases `kfm` (`cli/README.md`): `release.yml`'s `cli-wheels` job builds
+its wheels with maturin for linux x86_64 (one static musl binary tagged manylinux2014 and
+musllinux_1_2), macos arm64 and windows x86_64, with `KFM_BOTS_TAG` set to the tag so the
+binary's default build image is `ghcr.io/minip8/kfm-bot-build:<tag>`, the image the `images`
+job pushes; `cli-release` attaches the wheels and `SHA256SUMS-cli` to the tag's GitHub release
+(creating the release if it does not exist) and `cli-pypi` publishes them to PyPI as
+**`kfm-cli`** (`kfm` is taken there by an unrelated project; the command is still `kfm`).
+Before tagging, set `version` in `cli/Cargo.toml` to the tag without its `v` (`0.2.0` for
+`v0.2.0`): the job fails on a mismatch. Only wheels are published, no sdist (the build reads
+`../sdk` and `../engine.lock` from the checkout).
+
+PyPI takes the upload through **trusted publishing**: no token is stored in the repository;
+PyPI trusts this repository's workflow's OIDC token instead. Once, before the first release:
+
+1. On PyPI, signed in as the account that will own the project: Account settings → Publishing
+   → "Add a new pending publisher" (or, once `kfm-cli` exists, the project's Settings →
+   Publishing → "Add a new publisher"), GitHub, with:
+
+   | Field | Value |
+   |---|---|
+   | PyPI Project Name | `kfm-cli` |
+   | Owner | `minip8` |
+   | Repository name | `kung-fu-monkeys-bots` |
+   | Workflow name | `release.yml` |
+   | Environment name | `pypi` |
+
+2. On GitHub, this repository's Settings → Environments → New environment `pypi`
+   (optionally with a required reviewer, so a tag waits for approval before it publishes).
+
+A manual run of the workflow builds the wheels as the `cli-wheel-*` artifacts and publishes
+nothing. A tag whose PyPI upload failed can be re-run from Actions (a version already on PyPI
+is refused: bump the version and tag again).
+
 ## The engine release
 
 The ladder plays every match with the `kfm_arena` baked into its image: the one of

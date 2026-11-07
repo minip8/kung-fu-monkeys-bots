@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Authorize the kfm CLI{% endblock %}
+{% block content %}
+<h1>Log in the kfm command line tool</h1>
+<p class="sub">You came here from <code>kfm login</code> on a computer of yours.</p>
+
+{% if let Some(message) = error %}<section class="error" role="alert">{{ message }}</section>{% endif %}
+
+{% if !sign_in.is_empty() %}
+<section class="signin">
+  <h2>Sign in first</h2>
+  <p>Sign in to the ladder, then confirm the login on the next page.</p>
+  {% for p in sign_in %}<a class="button" href="{{ p.href }}">Sign in with {{ p.label }}</a>{% endfor %}
+</section>
+{% endif %}
+
+{% if let Some(c) = confirm %}
+<section>
+  <h2>Authorize the kfm CLI on this computer?</h2>
+  <p>Signed in as <strong>{{ c.user }}</strong>. It creates a <code>submit</code> token named
+    <strong>'{{ c.token_name }}'</strong> and hands it to the <code>kfm</code> listening on this computer
+    (port {{ c.port }}), which stores it in its config file. The token can upload and activate your
+    teams' bots; revoke it on the <a href="/">portal</a> at any time, or with <code>kfm logout</code>.</p>
+  <p class="muted">Only continue if you ran <code>kfm login</code> yourself just now.</p>
+  <form class="row" method="post" action="/auth/cli">
+    <input type="hidden" name="csrf" value="{{ c.csrf }}">
+    <input type="hidden" name="port" value="{{ c.port }}">
+    <input type="hidden" name="state" value="{{ c.state }}">
+    <input type="hidden" name="host" value="{{ c.host }}">
+    <button type="submit" name="decision" value="allow">Authorize</button>
+    <button class="quiet" type="submit" name="decision" value="deny">Cancel</button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

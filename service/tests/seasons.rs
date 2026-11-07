@@ -190,6 +190,8 @@ async fn get_seasons_lists_them_with_the_current_one_marked(pool: PgPool) {
         assert!(list[0].get(key).is_some(), "{key}");
     }
     assert_eq!(list[0].as_object().unwrap().len(), 6);
+    // v1.3: the release the service plays new games with.
+    assert_eq!(body["engine_tag"], "v0.5.1");
 }
 
 /// The database URL of the test's own database (sqlx::test made it on the

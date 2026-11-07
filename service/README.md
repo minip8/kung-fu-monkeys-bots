@@ -6,7 +6,7 @@ over Postgres, as JSON routes and a server-rendered portal from one binary (step
 submissions, the object store, the jobs table and the build worker that turns a submission's
 source into a validated module (step 3b); then seasons, the scheduler's Swiss-style rounds, the
 match worker that plays each pair with the released `kfm_arena`, Glicko-2 ratings, replays and
-the public ladder (step 4).
+the public ladder (step 4); then the `kfm` command line tool's browser login (step 5).
 
 The HTTP surface is normative in [`docs/ladder-api.md`](../docs/ladder-api.md); change it
 there first.
@@ -17,6 +17,7 @@ there first.
 | `src/config.rs` | The environment, per role (`Config` for `serve`, `WorkerConfig`, `database_url_from`). |
 | `src/oauth.rs` | GitHub (`oauth2`) and Google (`openidconnect`, discovery) sign-in, linking, logout. |
 | `src/auth.rs` | Session cookies, the `Caller` extractor (session or bearer), CSRF. |
+| `src/cli_login.rs`, `templates/cli.html` | The `kfm` CLI's login (API v1.3, §5.1): the confirmation page, the one-time code, its exchange for a token. |
 | `src/tokens.rs`, `src/teams.rs`, `src/users.rs` | The JSON routes and the functions the portal shares. |
 | `src/portal.rs`, `templates/` | The portal (askama, no JavaScript; `base.html` is the layout). |
 | `src/submissions.rs`, `src/manifest.rs`, `src/archive.rs` | Uploads (the manifest, the zip's checks and unpacking), listing, activation. |

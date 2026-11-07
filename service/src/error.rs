@@ -73,6 +73,7 @@ error_codes! {
     TooLarge = ("too_large", PAYLOAD_TOO_LARGE, "The upload is over its size cap (4 MiB of source)."),
     RateLimited = ("rate_limited", TOO_MANY_REQUESTS, "A team submits at most once a minute; try again shortly."),
     NotReady = ("not_ready", CONFLICT, "Only a ready submission can be made active."),
+    InvalidCode = ("invalid_code", BAD_REQUEST, "The login code is unknown, used or expired; run kfm login again."),
 }
 
 /// An API error: `{"error":"<code>","message":"<message>"}` with the code's status.

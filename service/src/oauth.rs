@@ -89,6 +89,36 @@ struct FlowState {
     n: Option<String>,
     /// Expiry, Unix seconds.
     e: i64,
+    /// Where the browser goes after a successful sign-in (API v1.3: the CLI
+    /// login's page); `/` when absent. Only [`safe_next`] values get here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    r: Option<String>,
+}
+
+/// The query of a sign-in start: `next`, the page to come back to.
+#[derive(Deserialize)]
+pub struct StartQuery {
+    next: Option<String>,
+}
+
+/// The longest `next` kept.
+const MAX_NEXT_BYTES: usize = 512;
+
+/// `next` when it is a page a sign-in may return to: only the CLI login's
+/// (`/auth/cli?...`), a same-origin path of printable ASCII without `//` or
+/// a backslash, so a start link can never send a browser elsewhere.
+pub fn safe_next(next: Option<&str>) -> Option<String> {
+    let next = next?;
+    let ok = next.starts_with(crate::cli_login::PAGE_PREFIX)
+        && next.len() <= MAX_NEXT_BYTES
+        && next.bytes().all(|b| b.is_ascii_graphic())
+        && !next.contains("//")
+        && !next.contains('\\');
+    ok.then(|| next.to_owned())
+}
+
+fn next_of(query: Result<Query<StartQuery>, QueryRejection>) -> Option<String> {
+    query.ok().and_then(|Query(q)| safe_next(q.next.as_deref()))
 }
 
 /// What a provider says about the person signing in.
@@ -178,7 +208,10 @@ async fn google_metadata(state: &AppState) -> AppResult<CoreProviderMetadata> {
     Ok(metadata)
 }
 
-async fn start_github(State(state): State<AppState>) -> AppResult<Response> {
+async fn start_github(
+    State(state): State<AppState>,
+    query: Result<Query<StartQuery>, QueryRejection>,
+) -> AppResult<Response> {
     let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
     let (url, csrf) = github_client(&state)?
         .authorize_url(CsrfToken::new_random)
@@ -192,18 +225,22 @@ async fn start_github(State(state): State<AppState>) -> AppResult<Response> {
         v: verifier.secret().clone(),
         n: None,
         e: now_unix() + STATE_TTL_SECONDS,
+        r: next_of(query),
     };
     Ok(see_other(url.as_str(), vec![state_cookie(&state, &flow)?]))
 }
 
-async fn start_google(State(state): State<AppState>) -> Response {
-    match start_google_inner(&state).await {
+async fn start_google(
+    State(state): State<AppState>,
+    query: Result<Query<StartQuery>, QueryRejection>,
+) -> Response {
+    match start_google_inner(&state, next_of(query)).await {
         Ok(response) => response,
         Err(err) => fail(&state, err),
     }
 }
 
-async fn start_google_inner(state: &AppState) -> AppResult<Response> {
+async fn start_google_inner(state: &AppState, next: Option<String>) -> AppResult<Response> {
     let metadata = google_metadata(state).await?;
     let client = CoreClient::from_provider_metadata(
         metadata,
@@ -228,6 +265,7 @@ async fn start_google_inner(state: &AppState) -> AppResult<Response> {
         v: verifier.secret().clone(),
         n: Some(nonce.secret().clone()),
         e: now_unix() + STATE_TTL_SECONDS,
+        r: next,
     };
     Ok(see_other(url.as_str(), vec![state_cookie(state, &flow)?]))
 }
@@ -254,9 +292,10 @@ async fn callback_github(
     query: Result<Query<CallbackQuery>, QueryRejection>,
 ) -> Response {
     let result = async {
-        let (code, flow) = check_callback(&state, &headers, query, Provider::GitHub)?;
+        let (code, mut flow) = check_callback(&state, &headers, query, Provider::GitHub)?;
+        let next = flow.r.take();
         let profile = github_profile(&state, code, flow).await?;
-        finish(&state, session, profile).await
+        finish(&state, session, profile, next).await
     }
     .await;
     result.unwrap_or_else(|err| fail(&state, err))
@@ -269,9 +308,10 @@ async fn callback_google(
     query: Result<Query<CallbackQuery>, QueryRejection>,
 ) -> Response {
     let result = async {
-        let (code, flow) = check_callback(&state, &headers, query, Provider::Google)?;
+        let (code, mut flow) = check_callback(&state, &headers, query, Provider::Google)?;
+        let next = flow.r.take();
         let profile = google_profile(&state, code, flow).await?;
-        finish(&state, session, profile).await
+        finish(&state, session, profile, next).await
     }
     .await;
     result.unwrap_or_else(|err| fail(&state, err))
@@ -500,6 +540,7 @@ async fn finish(
     state: &AppState,
     session: Option<Session>,
     profile: Profile,
+    next: Option<String>,
 ) -> AppResult<Response> {
     let signed_in = session.as_ref().map(|s| s.user_id);
     let outcome = resolve_account(&state.db, signed_in, &profile).await?;
@@ -517,8 +558,9 @@ async fn finish(
         }
         cookies.push(auth::start_session(state, outcome.user_id()).await?);
     }
-    let location = match outcome {
-        Outcome::Linked(_) => format!("/?linked={}", profile.provider.as_str()),
+    let location = match (outcome, next) {
+        (_, Some(next)) => next,
+        (Outcome::Linked(_), None) => format!("/?linked={}", profile.provider.as_str()),
         _ => "/".to_owned(),
     };
     Ok(see_other(&location, cookies))

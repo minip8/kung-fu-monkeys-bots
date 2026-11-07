@@ -18,6 +18,15 @@ name: Release
 # the variables, deploy/README.md "Updating"). Without KFM_LADDER_VMS the job is skipped and
 # the VMs are updated by hand.
 #
+# The kfm CLI (cli/README.md, deploy/README.md "Releasing the CLI"): `cli-wheels` builds its
+# wheels with maturin (bindings = "bin": the binary only) for linux x86_64, macos arm64 and
+# windows x86_64, with KFM_BOTS_TAG set to the tag so the binary names this release's build
+# image; on a tag, `cli-release` attaches them (and their SHA256SUMS) to the tag's GitHub
+# release, creating it if need be, and `cli-pypi` publishes them to PyPI as kfm-cli through
+# trusted publishing (the `pypi` environment; no token in the repository). A manual run builds
+# the wheels as an artifact only. The Linux wheel is one static musl binary tagged both
+# manylinux2014 and musllinux_1_2: it has no libc to match, so one file installs everywhere.
+#
 # Repository settings it reads:
 #   variables  KFM_LADDER_VMS    the VMs to update, "name:zone ..." ladder VM first
 #                                (e.g. "kfm-ladder-1:australia-southeast1-b kfm-build-1:australia-southeast1-b")
@@ -119,3 +128,99 @@ jobs:
               "sudo /opt/kfm-ladder-deploy/vm/update.sh '$TAG'"
             echo "::endgroup::"
           done
+
+  cli-wheels:
+    name: cli wheel ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            manylinux: musllinux_1_2
+            args: --compatibility manylinux2014 musllinux_1_2
+          - { name: macos-arm64,    os: macos-latest,   target: aarch64-apple-darwin }
+          - { name: windows-x86_64, os: windows-latest, target: x86_64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v7
+      # On a tag the CLI's version must be the tag's, and the binary pins the tag's build image.
+      - name: The release the binary pins
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' cli/Cargo.toml | head -n 1)"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            [[ "$GITHUB_REF_NAME" == "v$version" ]] ||
+              { echo "::error::tag $GITHUB_REF_NAME but cli/Cargo.toml says $version"; exit 1; }
+          fi
+          echo "KFM_BOTS_TAG=v$version" >> "$GITHUB_ENV"
+      - uses: PyO3/maturin-action@v1
+        env:
+          KFM_BOTS_TAG: ${{ env.KFM_BOTS_TAG }}
+        with:
+          maturin-version: v1.16.0
+          working-directory: cli
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          # The Linux build runs in a container: pass the pin in.
+          docker-options: -e KFM_BOTS_TAG
+          args: --release --locked --out dist ${{ matrix.args }}
+      - name: The wheel runs
+        shell: bash
+        run: |
+          python3 -m venv /tmp/kfm-venv 2>/dev/null || python -m venv /tmp/kfm-venv
+          bin=/tmp/kfm-venv/bin; [[ -d $bin ]] || bin=/tmp/kfm-venv/Scripts
+          "$bin/python" -m pip install --no-index --find-links cli/dist kfm-cli
+          "$bin/kfm" --version
+          "$bin/kfm" --help > /dev/null
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cli-wheel-${{ matrix.name }}
+          path: cli/dist/*.whl
+
+  cli-release:
+    name: cli wheels on the GitHub release
+    needs: cli-wheels
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: cli-wheel-*
+          merge-multiple: true
+          path: dist
+      - name: Attach the wheels and their SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          sha256sum *.whl > SHA256SUMS-cli
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 ||
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" \
+              --notes "The ladder's release $TAG. kfm: uv tool install kfm-cli (cli/README.md)."
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber ./*.whl SHA256SUMS-cli
+
+  cli-pypi:
+    name: cli wheels to PyPI
+    needs: cli-wheels
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # PyPI's trusted publishing exchanges the workflow's OIDC token
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: cli-wheel-*
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
