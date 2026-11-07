@@ -18,6 +18,15 @@
 //! `KFM_LADDER_ROUND_SECONDS` old (judged on the database's clock), so a
 //! restart neither skips nor doubles one. Nothing is scheduled outside a
 //! season, and fewer than two eligible teams make no round.
+//!
+//! The default interval is 30 minutes: every game writes a replay to the
+//! object store, and a round every 5 minutes with 20 teams (30 pairs, 60
+//! games) wrote 17 k replays a day.
+//!
+//! The lock holder also sweeps old replays ([`crate::retention::prune_replays`])
+//! every [`crate::retention::REPLAY_SWEEP_EVERY`] over the same connection,
+//! when [`SchedulerSettings::replays`] is set: one process prunes, whatever
+//! the number of API instances and workers.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -29,11 +38,13 @@ use uuid::Uuid;
 
 use crate::glicko;
 use crate::jobs::{self, Kind};
+use crate::retention::{self, ReplayPrune};
 use crate::seasons::Season;
+use crate::store::Store;
 
 /// The advisory lock the scheduling instance holds ("kfm_ladd" in ASCII).
 pub const LOCK_KEY: i64 = 0x6b66_6d5f_6c61_6464;
-pub const DEFAULT_ROUND_SECONDS: u64 = 300;
+pub const DEFAULT_ROUND_SECONDS: u64 = 1800;
 pub const DEFAULT_OPPONENTS: usize = 3;
 /// The longest the loop sleeps between two looks at whether a round is due.
 pub const MAX_POLL: Duration = Duration::from_secs(15);
@@ -47,15 +58,40 @@ pub struct SchedulerSettings {
     pub opponents: usize,
     /// How often the loop looks (at most [`MAX_POLL`]).
     pub poll: Duration,
+    /// The replay sweep, `None` when replays are kept forever.
+    pub replays: Option<ReplaySweep>,
+}
+
+/// The replay sweep the lock holder runs.
+#[derive(Debug, Clone)]
+pub struct ReplaySweep {
+    pub store: Store,
+    /// `KFM_LADDER_REPLAY_HOURS`: a game's replay goes once it is this old.
+    pub older_than: Duration,
+    /// How often ([`retention::REPLAY_SWEEP_EVERY`]).
+    pub every: Duration,
 }
 
 impl SchedulerSettings {
+    /// Rounds only: no replay sweep.
     pub fn new(every: Duration, opponents: usize) -> SchedulerSettings {
         SchedulerSettings {
             every,
             opponents,
             poll: every.clamp(Duration::from_millis(50), MAX_POLL),
+            replays: None,
         }
+    }
+
+    /// Adds the replay sweep over `store` for replays older than `hours`
+    /// (`KFM_LADDER_REPLAY_HOURS`); 0 leaves it off (replays kept forever).
+    pub fn with_replay_hours(mut self, store: Store, hours: u64) -> SchedulerSettings {
+        self.replays = (hours > 0).then(|| ReplaySweep {
+            store,
+            older_than: Duration::from_secs(hours.saturating_mul(3600)),
+            every: retention::REPLAY_SWEEP_EVERY,
+        });
+        self
     }
 }
 
@@ -335,15 +371,36 @@ pub async fn unlock(conn: &mut PgConnection) -> Result<bool, sqlx::Error> {
     Ok(released)
 }
 
+/// One replay sweep over the lock holder's connection, logged.
+async fn sweep_replays(
+    conn: &mut PgConnection,
+    sweep: &ReplaySweep,
+) -> Result<ReplayPrune, sqlx::Error> {
+    let done = retention::prune_replays(conn, &sweep.store, sweep.older_than).await?;
+    if done.deleted > 0 || done.failed > 0 {
+        tracing::info!(
+            deleted = done.deleted,
+            failed = done.failed,
+            "replay retention: replays pruned"
+        );
+    } else {
+        tracing::debug!("replay retention: nothing to prune");
+    }
+    Ok(done)
+}
+
 /// The scheduler loop, until `shutdown` turns true: take the lock on a
 /// connection detached from the pool (a pooled connection holding it would
-/// be handed to other queries), then make a round whenever one is due. A
-/// failed round drops the connection, and with it the lock; the next look
-/// starts over.
+/// be handed to other queries), then make a round whenever one is due, and
+/// sweep old replays every `settings.replays.every`. A failed round or sweep
+/// (the database, not the store) drops the connection, and with it the
+/// lock; the next look starts over.
 pub async fn run(db: PgPool, settings: SchedulerSettings, mut shutdown: watch::Receiver<bool>) {
-    tracing::info!(every = ?settings.every, opponents = settings.opponents, "scheduler started");
+    tracing::info!(every = ?settings.every, opponents = settings.opponents,
+        replay_retention = ?settings.replays.as_ref().map(|r| r.older_than), "scheduler started");
     let mut held: Option<PgConnection> = None;
     let mut waiting_logged = false;
+    let mut next_replay_sweep = tokio::time::Instant::now();
     while !*shutdown.borrow() {
         if held.is_none() {
             match db.acquire().await {
@@ -376,6 +433,17 @@ pub async fn run(db: PgPool, settings: SchedulerSettings, mut shutdown: watch::R
                 Ok(_) => {}
                 Err(err) => {
                     tracing::warn!(error = %err, "scheduler: the round failed; letting the lock go");
+                    if let Some(conn) = held.take() {
+                        let _ = conn.close().await;
+                    }
+                }
+            }
+        }
+        if let (Some(conn), Some(sweep)) = (held.as_mut(), settings.replays.as_ref()) {
+            if tokio::time::Instant::now() >= next_replay_sweep {
+                next_replay_sweep = tokio::time::Instant::now() + sweep.every;
+                if let Err(err) = sweep_replays(conn, sweep).await {
+                    tracing::warn!(error = %err, "replay retention: the sweep failed; letting the lock go");
                     if let Some(conn) = held.take() {
                         let _ = conn.close().await;
                     }

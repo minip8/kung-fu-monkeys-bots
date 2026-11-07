@@ -3,8 +3,9 @@
 # (loopback); Caddy terminates TLS for KFM_LADDER_DOMAIN and proxies to it. Before each start
 # `kfm-ladder migrate` brings the schema to this release's (the API is the only role that
 # migrates, so updating this VM first is what updates the schema). Secrets reach the container
-# through the environment, never the command line; only the variables `serve` needs are
-# passed. The container runs as the image's unprivileged user with a read-only root.
+# through the environment, never the command line; only the variables `serve` reads are
+# passed (`-e NAME` passes nothing when ladder.env leaves NAME out, so the defaults hold).
+# The container runs as the image's unprivileged user with a read-only root.
 [Unit]
 Description=Kung Fu Monkeys ladder API and portal
 Documentation=https://github.com/minip8/kung-fu-monkeys-bots/blob/main/deploy/README.md
@@ -28,6 +29,9 @@ ExecStart=/usr/bin/docker run --rm --name kfm-ladder-api --network host \
     -e KFM_LADDER_GOOGLE_CLIENT_ID -e KFM_LADDER_GOOGLE_CLIENT_SECRET \
     -e KFM_LADDER_S3_ENDPOINT -e KFM_LADDER_S3_BUCKET -e KFM_LADDER_S3_ACCESS_KEY \
     -e KFM_LADDER_S3_SECRET_KEY -e KFM_LADDER_S3_REGION -e SENTRY_DSN \
+    -e KFM_LADDER_TRUST_PROXY -e KFM_LADDER_REPLAY_HOURS -e KFM_LADDER_PRESIGN_PER_MINUTE \
+    -e KFM_LADDER_ROUND_SECONDS -e KFM_LADDER_ROUND_OPPONENTS -e KFM_LADDER_VIEWER_URL \
+    -e KFM_LADDER_CONTACT \
     ${KFM_IMAGE_REPO}/kfm-ladder:${KFM_IMAGE_TAG} serve
 ExecStop=/usr/bin/docker stop -t 20 kfm-ladder-api
 Restart=always

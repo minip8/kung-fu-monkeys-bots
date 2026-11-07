@@ -17,12 +17,22 @@ pub const DEFAULT_GOOGLE_ISSUER: &str = "https://accounts.google.com";
 /// The engine's page: `<viewer>/<tag>/?replay=<url>` opens a replay in the
 /// client of the match's release (architecture v0.59).
 pub const DEFAULT_VIEWER_URL: &str = "https://kfm.minip8.com";
+/// Who the privacy page names as the operator's contact.
+pub const DEFAULT_CONTACT: &str = "https://github.com/minip8/kung-fu-monkeys-bots/issues";
 /// A ranked game's tick cap: ten minutes at 60 Hz.
 pub const DEFAULT_MATCH_TICKS: u32 = 36_000;
 /// The highest cap accepted: an hour of play.
 pub const MAX_MATCH_TICKS: u32 = 216_000;
 /// The most opponents a team may be given per round.
 pub const MAX_OPPONENTS: u64 = 16;
+/// How long a game's replay is kept: a day (`KFM_LADDER_REPLAY_HOURS`).
+pub const DEFAULT_REPLAY_HOURS: u64 = 24;
+/// The longest retention accepted: ten years.
+pub const MAX_REPLAY_HOURS: u64 = 10 * 365 * 24;
+/// Requests per minute per client to the routes that presign
+/// (`KFM_LADDER_PRESIGN_PER_MINUTE`).
+pub const DEFAULT_PRESIGN_PER_MINUTE: u32 = 60;
+pub const MAX_PRESIGN_PER_MINUTE: u64 = 100_000;
 
 /// A configuration error: the variable and what is wrong with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,7 +73,7 @@ pub struct Config {
     pub database_url: String,
     pub listen: SocketAddr,
     /// The service's public origin, without a trailing slash
-    /// (`https://ladder.kfm.minip8.com`): OAuth redirect URIs and absolute links.
+    /// (`https://bots.kfm.minip8.com`): OAuth redirect URIs and absolute links.
     pub public_url: String,
     /// The HMAC-SHA256 key that signs the session and OAuth state cookies.
     pub session_key: [u8; 32],
@@ -81,7 +91,7 @@ pub struct Config {
     /// The `kfm_arena` binary (workers, 3b); optional for `serve`.
     pub arena: Option<PathBuf>,
     /// `KFM_LADDER_ROUND_SECONDS`: a scheduler round is due when the last is
-    /// this old (default 300).
+    /// this old (default 1800).
     pub round_seconds: u64,
     /// `KFM_LADDER_ROUND_OPPONENTS`: the most pairs a team is in per round
     /// (default 3).
@@ -89,6 +99,20 @@ pub struct Config {
     /// `KFM_LADDER_VIEWER_URL`: the origin of the engine's page, whose
     /// `/<tag>/?replay=<url>` plays a replay (default https://kfm.minip8.com).
     pub viewer_url: String,
+    /// `KFM_LADDER_REPLAY_HOURS`: a game's replay object is deleted once the
+    /// game is this many hours old (default 24); 0 keeps replays forever.
+    pub replay_hours: u64,
+    /// `KFM_LADDER_PRESIGN_PER_MINUTE`: requests per minute per client IP to
+    /// the routes that hand out presigned URLs (default 60); 0 disables the
+    /// limit.
+    pub presign_per_minute: u32,
+    /// `KFM_LADDER_TRUST_PROXY=1`: the client IP is the first
+    /// `X-Forwarded-For` entry (Caddy in front), not the peer address.
+    pub trust_proxy: bool,
+    /// `KFM_LADDER_CONTACT`: how to reach the operator, as `/privacy` shows
+    /// it (a URL, an email address or a line of text; default the
+    /// repository's issues page).
+    pub contact: String,
     pub sentry_dsn: Option<String>,
 }
 
@@ -191,6 +215,28 @@ impl Config {
             });
         }
         let viewer_url = viewer.as_str().trim_end_matches('/').to_owned();
+        let replay_hours = number_from(
+            &get,
+            "KFM_LADDER_REPLAY_HOURS",
+            DEFAULT_REPLAY_HOURS,
+            0..=MAX_REPLAY_HOURS,
+        )?;
+        let presign_per_minute = number_from(
+            &get,
+            "KFM_LADDER_PRESIGN_PER_MINUTE",
+            u64::from(DEFAULT_PRESIGN_PER_MINUTE),
+            0..=MAX_PRESIGN_PER_MINUTE,
+        )? as u32;
+        let trust_proxy = match get("KFM_LADDER_TRUST_PROXY").as_deref().map(str::trim) {
+            None | Some("0") => false,
+            Some("1") => true,
+            Some(other) => {
+                return Err(ConfigError {
+                    variable: "KFM_LADDER_TRUST_PROXY",
+                    problem: format!("{other:?} is not 0 or 1"),
+                })
+            }
+        };
 
         Ok(Config {
             database_url,
@@ -209,6 +255,13 @@ impl Config {
             round_seconds,
             round_opponents,
             viewer_url,
+            replay_hours,
+            presign_per_minute,
+            trust_proxy,
+            contact: get("KFM_LADDER_CONTACT")
+                .map(|c| c.trim().to_owned())
+                .filter(|c| !c.is_empty())
+                .unwrap_or_else(|| DEFAULT_CONTACT.to_owned()),
             sentry_dsn: get("SENTRY_DSN"),
         })
     }
@@ -234,6 +287,10 @@ impl fmt::Debug for Config {
             .field("round_seconds", &self.round_seconds)
             .field("round_opponents", &self.round_opponents)
             .field("viewer_url", &self.viewer_url)
+            .field("replay_hours", &self.replay_hours)
+            .field("presign_per_minute", &self.presign_per_minute)
+            .field("trust_proxy", &self.trust_proxy)
+            .field("contact", &self.contact)
             .field("sentry", &self.sentry_dsn.is_some())
             .finish_non_exhaustive()
     }
@@ -449,9 +506,13 @@ mod tests {
         assert_eq!(config.github_api_url, "https://api.github.com");
         assert_eq!(config.google_issuer, DEFAULT_GOOGLE_ISSUER);
         assert!(config.arena.is_none());
-        assert_eq!(config.round_seconds, 300);
+        assert_eq!(config.round_seconds, 1800);
         assert_eq!(config.round_opponents, 3);
         assert_eq!(config.viewer_url, "https://kfm.minip8.com");
+        assert_eq!(config.replay_hours, 24);
+        assert_eq!(config.presign_per_minute, 60);
+        assert!(!config.trust_proxy);
+        assert_eq!(config.contact, DEFAULT_CONTACT);
         assert!(config.sentry_dsn.is_none());
         assert!(!format!("{config:?}").contains("gh-secret"));
     }
@@ -536,10 +597,23 @@ mod tests {
         map.insert("KFM_LADDER_ROUND_SECONDS", "60".to_owned());
         map.insert("KFM_LADDER_ROUND_OPPONENTS", "5".to_owned());
         map.insert("KFM_LADDER_VIEWER_URL", "http://127.0.0.1:8000/".to_owned());
+        map.insert("KFM_LADDER_REPLAY_HOURS", "0".to_owned());
+        map.insert("KFM_LADDER_PRESIGN_PER_MINUTE", "0".to_owned());
+        map.insert("KFM_LADDER_TRUST_PROXY", "1".to_owned());
+        map.insert("KFM_LADDER_CONTACT", " ladder@example.org ".to_owned());
         let config = load(&map).unwrap();
+        assert_eq!(config.contact, "ladder@example.org");
         assert_eq!(config.round_seconds, 60);
         assert_eq!(config.round_opponents, 5);
         assert_eq!(config.viewer_url, "http://127.0.0.1:8000");
+        assert_eq!(config.replay_hours, 0);
+        assert_eq!(config.presign_per_minute, 0);
+        assert!(config.trust_proxy);
+        map.insert("KFM_LADDER_REPLAY_HOURS", "72".to_owned());
+        map.insert("KFM_LADDER_TRUST_PROXY", "0".to_owned());
+        let config = load(&map).unwrap();
+        assert_eq!(config.replay_hours, 72);
+        assert!(!config.trust_proxy);
     }
 
     #[test]
@@ -566,6 +640,12 @@ mod tests {
             ("KFM_LADDER_ROUND_OPPONENTS", "-1"),
             ("KFM_LADDER_VIEWER_URL", "kfm.minip8.com"),
             ("KFM_LADDER_VIEWER_URL", "https://kfm.minip8.com/?x=1"),
+            ("KFM_LADDER_REPLAY_HOURS", "-1"),
+            ("KFM_LADDER_REPLAY_HOURS", "a day"),
+            ("KFM_LADDER_REPLAY_HOURS", "87601"),
+            ("KFM_LADDER_PRESIGN_PER_MINUTE", "100001"),
+            ("KFM_LADDER_PRESIGN_PER_MINUTE", "lots"),
+            ("KFM_LADDER_TRUST_PROXY", "yes"),
         ] {
             let mut map = base();
             map.insert(name, value.to_owned());

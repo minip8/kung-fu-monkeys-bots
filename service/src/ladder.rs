@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::extract::ApiPath;
 use crate::glicko::{self, Rating};
+use crate::presign_limit::PresignQuota;
 use crate::seasons::{self, Season, SeasonView};
 use crate::AppState;
 
@@ -495,8 +496,10 @@ pub async fn matches_route(
     })))
 }
 
-/// `GET /matches/{m}` (auth: none).
+/// `GET /matches/{m}` (auth: none). It presigns the replay URL, so it counts
+/// against the caller's [`PresignQuota`] (the HTML page too).
 pub async fn match_route(
+    _quota: PresignQuota,
     State(state): State<AppState>,
     headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,

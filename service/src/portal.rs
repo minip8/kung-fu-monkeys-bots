@@ -31,6 +31,7 @@ const RECENT_MATCHES: i64 = 10;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(index))
+        .route("/privacy", get(privacy))
         .route("/portal/tokens", post(create_token))
         .route("/portal/tokens/{id}/revoke", post(revoke_token))
         .route("/portal/teams", post(create_team))
@@ -780,6 +781,47 @@ pub fn match_page(detail: &MatchDetail) -> AppResult<Response> {
         content_hash: detail.content_hash.clone(),
         build_hash: detail.build_hash.clone().unwrap_or_default(),
         result: serde_json::to_string_pretty(&detail.result).map_err(AppError::internal)?,
+    }
+    .render()
+    .map_err(AppError::internal)?;
+    Ok(page_response(StatusCode::OK, html))
+}
+
+/// The date the privacy page's text last changed.
+pub const PRIVACY_DATE: &str = "2026-11-07";
+
+#[derive(Template)]
+#[template(path = "privacy.html")]
+struct PrivacyPage {
+    contact: String,
+    /// A link for the contact when it is a URL or an email address.
+    contact_href: Option<String>,
+    replay_hours: u64,
+    session_idle_days: i32,
+    date: &'static str,
+}
+
+/// Where the contact links to: itself for an http(s) URL, `mailto:` for an
+/// address, nothing for other text.
+fn contact_href(contact: &str) -> Option<String> {
+    if contact.starts_with("https://") || contact.starts_with("http://") {
+        Some(contact.to_owned())
+    } else if contact.contains('@') && !contact.contains(char::is_whitespace) {
+        Some(format!("mailto:{contact}"))
+    } else {
+        None
+    }
+}
+
+/// `GET /privacy` (auth: none): what the service stores and why.
+async fn privacy(State(state): State<AppState>) -> AppResult<Response> {
+    let contact = state.config.contact.clone();
+    let html = PrivacyPage {
+        contact_href: contact_href(&contact),
+        contact,
+        replay_hours: state.config.replay_hours,
+        session_idle_days: crate::auth::SESSION_IDLE_DAYS,
+        date: PRIVACY_DATE,
     }
     .render()
     .map_err(AppError::internal)?;

@@ -42,12 +42,15 @@
   .seasons a { margin-right: 12px; }
   .seasons strong { margin-right: 12px; }
   .scroll { overflow-x: auto; }
+  footer { margin: 32px 0 0; padding: 12px 0 0; border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem; }
+  footer a { margin-right: 16px; color: var(--accent); }
 </style>
 </head>
 <body>
 <main>
 <nav><a href="/">Portal</a><a href="/ladder">Ladder</a></nav>
 {% block content %}{% endblock %}
+<footer><a href="/privacy">Privacy</a><a href="https://github.com/minip8/kung-fu-monkeys-bots">Source</a></footer>
 </main>
 </body>
 </html>

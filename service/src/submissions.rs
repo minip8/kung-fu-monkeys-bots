@@ -23,6 +23,7 @@ use uuid::Uuid;
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult, AppError, AppResult, ErrorCode};
 use crate::extract::{ApiPath, JsonBody};
+use crate::presign_limit::PresignQuota;
 use crate::tokens::Scope;
 use crate::{archive, jobs, manifest, store, AppState};
 
@@ -425,8 +426,10 @@ pub async fn list(
     Ok(Json(serde_json::json!({ "submissions": submissions })))
 }
 
-/// `GET /submissions/{s}` (any; a member of its team).
+/// `GET /submissions/{s}` (any; a member of its team). It presigns the log
+/// URL, so it counts against the caller's [`PresignQuota`].
 pub async fn show(
+    _quota: PresignQuota,
     State(state): State<AppState>,
     caller: Caller,
     ApiPath(id): ApiPath<Uuid>,

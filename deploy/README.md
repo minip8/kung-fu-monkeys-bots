@@ -36,7 +36,7 @@ differ (`ladder.env.example` marks each line `[ladder]` or `[build]`):
 
 | Role | Container | Gets |
 |---|---|---|
-| `serve` (+ `migrate` before it) | unprivileged user, read-only root, no capabilities, host network on loopback | the database, the portal's URL, the session key, both OAuth clients, the object store, Sentry |
+| `serve` (+ `migrate` before it) | unprivileged user, read-only root, no capabilities, host network on loopback | the database, the portal's URL, the session key, both OAuth clients, the object store, Sentry, the ladder's optional settings (rounds, replay retention, the presigning limit, `KFM_LADDER_TRUST_PROXY`, the privacy contact) |
 | `worker match` | the same, plus a 768 MiB memory cap and a process cap | the database, the object store, Sentry |
 | `worker build` | root, `--runtime runc`, the Docker socket and `/var/lib/kfm-ladder/build` mounted | the database, the object store, Sentry, `KFM_BUILD_IMAGE`, `KFM_LADDER_BUILD_DIR` |
 
@@ -62,16 +62,17 @@ the same path inside and outside (`KFM_LADDER_BUILD_DIR`, and `TMPDIR` too).
    origin (R2 → the bucket → Settings → CORS policy).
 2. **GitHub sign-in.** github.com → Settings → Developer settings → OAuth Apps → New OAuth App
    (under the `minip8` organisation's settings, so it outlives one account): homepage
-   `https://ladder.kfm.minip8.com`, authorization callback URL
-   `https://ladder.kfm.minip8.com/auth/github/callback`. Generate a client secret:
+   `https://bots.kfm.minip8.com`, authorization callback URL
+   `https://bots.kfm.minip8.com/auth/github/callback`. Generate a client secret:
    `KFM_LADDER_GITHUB_CLIENT_ID` and `_SECRET`. A development app has the callback
    `http://127.0.0.1:8090/auth/github/callback` (an OAuth app has one callback URL, so
    development gets its own app).
 3. **Google sign-in.** Google Cloud console (any project; the VMs' is fine) → APIs & Services →
-   OAuth consent screen: External, the app name, the support email, scopes `openid`, `email`,
-   `profile`; publish it (in testing only listed test users can sign in). Then Credentials →
+   OAuth consent screen: External, the app name, the support email, the privacy policy URL
+   `https://bots.kfm.minip8.com/privacy` (the portal serves it; `KFM_LADDER_CONTACT` sets its
+   contact), scopes `openid`, `email`, `profile`; publish it (in testing only listed test users can sign in). Then Credentials →
    Create credentials → OAuth client ID, type *Web application*, authorised redirect URI
-   `https://ladder.kfm.minip8.com/auth/google/callback` (add
+   `https://bots.kfm.minip8.com/auth/google/callback` (add
    `http://127.0.0.1:8090/auth/google/callback` for development; Google takes several):
    `KFM_LADDER_GOOGLE_CLIENT_ID` and `_SECRET`.
 4. **The engine release.** `engine.lock`'s `tag=` must name an engine release with
@@ -110,7 +111,7 @@ the same path inside and outside (`KFM_LADDER_BUILD_DIR`, and `TMPDIR` too).
    google-startup-scripts -f`. The default network's `default-allow-ssh` (and
    `default-allow-rdp`) apply to every VM until deleted: after step 10, delete them and the
    build VM has no inbound port but IAP's SSH.
-8. **DNS.** An A record `ladder.kfm.minip8.com` → the ladder VM's printed IP, *DNS only*
+8. **DNS.** An A record `bots.kfm.minip8.com` → the ladder VM's printed IP, *DNS only*
    (grey cloud): Caddy answers the ACME HTTP challenge itself and retries until the name
    resolves.
 9. **The schema.** The API's unit runs `kfm-ladder migrate` before every start, so a fresh
@@ -128,8 +129,10 @@ the same path inside and outside (`KFM_LADDER_BUILD_DIR`, and `TMPDIR` too).
      season create 2026-12 --start 2026-12-01T00:00:00Z --end 2027-01-01T00:00:00Z
    sudo docker run --rm --network host --env-file /etc/kfm/ladder.env ghcr.io/minip8/kfm-ladder:v0.1.0 season list
    ```
-   The API's scheduler then makes a round every `KFM_LADDER_ROUND_SECONDS` (default 300) and
-   the match workers play it.
+   The API's scheduler then makes a round every `KFM_LADDER_ROUND_SECONDS` (default 1800) and
+   the match workers play it. It also deletes replays older than `KFM_LADDER_REPLAY_HOURS`
+   (default 24) from the bucket every 10 minutes; the matches themselves stay. The bucket
+   therefore holds about a day of replays: at the defaults, 20 teams make 2 880 a day.
 10. **Automatic updates.** The engine's `deploy/gcp/setup_deploy_identity.sh`, run from an
     engine checkout for this repository, adds a second provider to the same pool and service
     account (its first provider admits only the engine repository):
@@ -145,7 +148,7 @@ the same path inside and outside (`KFM_LADDER_BUILD_DIR`, and `TMPDIR` too).
       --body 'kfm-ladder-1:australia-southeast1-b kfm-build-1:australia-southeast1-b'
     ```
     Run it after the VMs exist: it grants act-as on the service accounts the `kfm-*` VMs use.
-11. **Check.** `curl https://ladder.kfm.minip8.com/healthz`; sign in on the portal with both
+11. **Check.** `curl https://bots.kfm.minip8.com/healthz`; sign in on the portal with both
     providers; on the build VM, the gVisor check below; submit an example bot
     (`examples/starter`) and watch it go queued → building → ready
     (`journalctl -u kfm-ladder-build` on `kfm-build-1`).

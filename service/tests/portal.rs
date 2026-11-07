@@ -311,3 +311,54 @@ async fn the_portal_submits_lists_and_activates(pool: PgPool) {
     assert!(html.contains("<strong class=\"good\">active</strong>"));
     assert!(!html.contains(&format!("name=\"submission\" value=\"{id}\"")));
 }
+
+#[sqlx::test]
+async fn the_privacy_page_is_public_and_linked_from_every_page(pool: PgPool) {
+    let app = common::start(pool).await;
+    let response = reqwest::get(format!("{}/privacy", app.base)).await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert!(response.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/html"));
+    let html = response.text().await.unwrap();
+    assert!(html.contains("<h1>Privacy</h1>"), "{html}");
+    assert!(html.contains(kfm_ladder::portal::PRIVACY_DATE));
+    assert!(html.contains("24 hours"));
+    // The default contact is the repository's issues page, as a link.
+    assert!(html.contains(&format!(
+        "<a href=\"{0}\">{0}</a>",
+        kfm_ladder::config::DEFAULT_CONTACT
+    )));
+    // The footer of the shared layout links to it, signed out.
+    let index = reqwest::get(format!("{}/", app.base))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        index.contains("<a href=\"/privacy\">Privacy</a>"),
+        "{index}"
+    );
+}
+
+#[sqlx::test]
+async fn the_privacy_contact_is_configurable(pool: PgPool) {
+    let app = common::start_configured(pool, |c| {
+        c.contact = "ladder@example.org".to_owned();
+        c.replay_hours = 48;
+    })
+    .await;
+    let html = reqwest::get(format!("{}/privacy", app.base))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        html.contains("<a href=\"mailto:ladder@example.org\">ladder@example.org</a>"),
+        "{html}"
+    );
+    assert!(html.contains("48 hours"));
+}

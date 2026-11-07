@@ -26,6 +26,7 @@ pub mod manifest;
 pub mod match_worker;
 pub mod oauth;
 pub mod portal;
+pub mod presign_limit;
 pub mod retention;
 pub mod scheduler;
 pub mod seasons;
@@ -62,6 +63,8 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub(crate) http: reqwest::Client,
     pub(crate) google: Arc<oauth::GoogleCache>,
+    /// The per-client limit of the presigning routes.
+    pub presign: Arc<presign_limit::PresignLimiter>,
 }
 
 impl AppState {
@@ -74,7 +77,10 @@ impl AppState {
             .build()
             .expect("the HTTP client builds with static settings");
         let store = Store::new(&config.s3).expect("the object store client builds offline");
+        let presign =
+            presign_limit::PresignLimiter::new(config.presign_per_minute, config.trust_proxy);
         AppState {
+            presign: Arc::new(presign),
             db,
             store: Arc::new(store),
             config: Arc::new(config),
@@ -123,15 +129,20 @@ pub fn router(state: AppState) -> Router {
     routes().with_state(state)
 }
 
-/// Serves the API and the portal on `listener` until `shutdown` resolves.
+/// Serves the API and the portal on `listener` until `shutdown` resolves,
+/// with each connection's peer address (`ConnectInfo`) for the presigning
+/// routes' limit.
 pub async fn serve(
     state: AppState,
     listener: TcpListener,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown)
-        .await
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
 }
 
 async fn not_found() -> AppError {
