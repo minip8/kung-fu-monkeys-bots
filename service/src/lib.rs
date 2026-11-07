@@ -21,6 +21,7 @@ pub mod manifest;
 pub mod oauth;
 pub mod portal;
 pub mod retention;
+pub mod seasons;
 pub mod store;
 pub mod submissions;
 pub mod teams;
@@ -80,6 +81,7 @@ impl AppState {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/seasons", get(seasons::list_route))
         .route("/me", get(users::me))
         .route("/tokens", get(tokens::list).post(tokens::create))
         .route("/tokens/{id}", delete(tokens::revoke))

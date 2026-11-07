@@ -10,7 +10,7 @@ use kfm_ladder::builder::{BuildSettings, BuildWorker};
 use kfm_ladder::config::{database_url_from, Config, WorkerConfig};
 use kfm_ladder::store::Store;
 use kfm_ladder::worker;
-use kfm_ladder::{db, AppState};
+use kfm_ladder::{db, seasons, AppState};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -40,6 +40,34 @@ enum Command {
         #[command(subcommand)]
         role: WorkerRole,
     },
+    /// Make or list seasons (an operator action on the VM; needs
+    /// DATABASE_URL only, and applies pending migrations first).
+    Season {
+        #[command(subcommand)]
+        action: SeasonAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SeasonAction {
+    /// Create a season: the window [start, end) in which its matches are
+    /// scheduled. Windows never overlap, so at most one season is current.
+    Create {
+        /// The season's name (`2026-12`, `Season 1`).
+        name: String,
+        /// The first instant, RFC 3339 (`2026-12-01T00:00:00Z`).
+        #[arg(long)]
+        start: String,
+        /// The end, RFC 3339, exclusive: the ranking freezes here.
+        #[arg(long)]
+        end: String,
+        /// The content mode its matches play.
+        #[arg(long, default_value = kfm_ladder::seasons::DEFAULT_MODE)]
+        mode: String,
+    },
+    /// List every season, the latest start first: name, start, end, mode,
+    /// id, and `current` on the one whose window holds now.
+    List,
 }
 
 #[derive(Subcommand, Debug, Clone, Copy)]
@@ -80,6 +108,46 @@ fn main() -> ExitCode {
             let _sentry = init_sentry(config.sentry_dsn.clone());
             init_logging();
             run(worker(config, build))
+        }
+        Command::Season { action } => {
+            let url = match database_url_from(|k| std::env::var(k).ok()) {
+                Ok(url) => url,
+                Err(err) => {
+                    eprintln!("kfm-ladder: {err}");
+                    return ExitCode::from(2);
+                }
+            };
+            let times = match &action {
+                SeasonAction::Create { start, end, .. } => {
+                    match (seasons::parse_time(start), seasons::parse_time(end)) {
+                        (Ok(s), Ok(e)) => Some((s, e)),
+                        (Err(err), _) | (_, Err(err)) => {
+                            eprintln!("kfm-ladder: {err}");
+                            return ExitCode::from(2);
+                        }
+                    }
+                }
+                SeasonAction::List => None,
+            };
+            init_logging();
+            run(async move {
+                let pool = db::connect(&url, DB_PATIENCE).await?;
+                db::migrate(&pool).await?;
+                match (action, times) {
+                    (SeasonAction::Create { name, mode, .. }, Some((start, end))) => {
+                        let season = seasons::create(&pool, &name, start, end, &mode).await?;
+                        let now = seasons::db_now(&pool).await?;
+                        println!("{}", seasons::format_line(&season, now));
+                    }
+                    _ => {
+                        let now = seasons::db_now(&pool).await?;
+                        for season in seasons::list(&pool).await? {
+                            println!("{}", seasons::format_line(&season, now));
+                        }
+                    }
+                }
+                Ok(())
+            })
         }
         Command::Migrate => {
             let url = match database_url_from(|k| std::env::var(k).ok()) {
