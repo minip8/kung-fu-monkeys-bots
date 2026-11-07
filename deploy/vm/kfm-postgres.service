@@ -1,0 +1,31 @@
+# The ladder's system of record (architecture §11 "M7 step 3 design (v0.63)": Postgres as a
+# container on the API VM). The data directory is /var/lib/kfm/postgres on the host, so the
+# container is disposable; the nightly dump (kfm-postgres-backup.timer) is the backup.
+# --network host with listen_addresses from KFM_POSTGRES_LISTEN: `*` for the build VM over
+# the private network (the provider firewall admits 5432 from it alone), else 127.0.0.1.
+# The image stays at postgres:17: update.sh never pulls it, a minor update is by hand and a
+# major one is a dump and restore (deploy/README.md "Postgres").
+[Unit]
+Description=Kung Fu Monkeys ladder database (Postgres 17)
+Documentation=https://github.com/minip8/kung-fu-monkeys-bots/blob/main/deploy/README.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+EnvironmentFile=/etc/kfm/ladder.env
+ExecStartPre=-/usr/bin/docker rm -f kfm-postgres
+ExecStart=/usr/bin/docker run --rm --name kfm-postgres --network host \
+    --log-opt max-size=10m --log-opt max-file=3 --shm-size 256m \
+    -v /var/lib/kfm/postgres:/var/lib/postgresql/data \
+    -e POSTGRES_USER=kfm -e POSTGRES_DB=kfm -e POSTGRES_PASSWORD \
+    postgres:17 -c listen_addresses=${KFM_POSTGRES_LISTEN}
+ExecStop=/usr/bin/docker stop -t 60 kfm-postgres
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

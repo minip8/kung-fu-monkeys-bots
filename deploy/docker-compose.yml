@@ -1,0 +1,160 @@
+# Local development stack of the ladder (deploy/README.md "Local development"): Postgres 17,
+# MinIO as the S3-compatible object store (with the bucket created at start), the bot build
+# image, and the service in every role (migrate, the API and portal, a match worker, the
+# build worker), built from this checkout.
+#
+#   docker compose -f deploy/docker-compose.yml up --build
+#   curl http://127.0.0.1:8090/healthz
+#
+# The portal is http://127.0.0.1:8090. The MinIO console is http://127.0.0.1:9001 (user
+# kfm-dev, password kfm-dev-secret): the bucket kfm-ladder holds sources/, modules/, logs/ and
+# replays/ as the service writes them. Postgres is postgres://kfm:kfm@127.0.0.1:5432/kfm.
+#
+# network_mode: host everywhere, as the engine's compose file: the S3 endpoint and the
+# portal's URLs are the same 127.0.0.1 addresses inside the containers and in a browser (a
+# presigned replay URL works from both). Linux; Docker Desktop needs host networking turned
+# on in its settings. Ports 5432, 8090, 9000 and 9001 must be free; KFM_DEV_POSTGRES_PORT=N
+# moves Postgres (and every DATABASE_URL here) when another one already has 5432.
+#
+# Sign-in needs an OAuth app of your own with callbacks on http://127.0.0.1:8090 (deploy/
+# README.md "Day one", steps 2 and 3): export KFM_LADDER_GITHUB_CLIENT_ID/_SECRET and/or
+# KFM_LADDER_GOOGLE_CLIENT_ID/_SECRET before `up`. While engine.lock has tag= empty, name the
+# engine release the image bakes in: KFM_ENGINE_TAG=v0.5.1 docker compose ... up --build.
+#
+# The build worker starts the sandbox containers through this machine's Docker socket under
+# Docker's default runtime (runc here; runsc only on the build VM), with the build directory
+# bind-mounted at the same path inside and outside (deploy/vm/kfm-ladder-build.service).
+#
+# Only the stores, without the service: docker compose -f deploy/docker-compose.yml up -d postgres minio bucket
+
+name: kfm-ladder
+
+x-ladder: &ladder
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.ladder
+    args:
+      KFM_ENGINE_TAG: ${KFM_ENGINE_TAG:-}
+  image: kfm-ladder:dev
+  network_mode: host
+  environment: &ladder-env
+    DATABASE_URL: postgres://kfm:kfm@127.0.0.1:${KFM_DEV_POSTGRES_PORT:-5432}/kfm
+    KFM_LADDER_LISTEN: 127.0.0.1:8090
+    KFM_LADDER_PUBLIC_URL: http://127.0.0.1:8090
+    # 64 hex characters of "kfm-ladder-dev-key-not-a-secret.": development only.
+    KFM_LADDER_SESSION_KEY: 6b666d2d6c61646465722d6465762d6b65792d6e6f742d612d7365637265742e
+    # The service requires the OAuth settings to serve; the placeholders start it, and sign-in
+    # works once the four are exported from real apps registered with http://127.0.0.1:8090
+    # callbacks (service/README.md).
+    KFM_LADDER_GITHUB_CLIENT_ID: ${KFM_LADDER_GITHUB_CLIENT_ID:-dev-github-client-id}
+    KFM_LADDER_GITHUB_CLIENT_SECRET: ${KFM_LADDER_GITHUB_CLIENT_SECRET:-dev-github-client-secret}
+    KFM_LADDER_GOOGLE_CLIENT_ID: ${KFM_LADDER_GOOGLE_CLIENT_ID:-dev-google-client-id}
+    KFM_LADDER_GOOGLE_CLIENT_SECRET: ${KFM_LADDER_GOOGLE_CLIENT_SECRET:-dev-google-client-secret}
+    KFM_LADDER_S3_ENDPOINT: http://127.0.0.1:9000
+    KFM_LADDER_S3_BUCKET: kfm-ladder
+    KFM_LADDER_S3_ACCESS_KEY: kfm-dev
+    KFM_LADDER_S3_SECRET_KEY: kfm-dev-secret
+    KFM_LADDER_S3_REGION: us-east-1
+    SENTRY_DSN: ""
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17
+    network_mode: host
+    command: ["-c", "listen_addresses=127.0.0.1", "-c", "port=${KFM_DEV_POSTGRES_PORT:-5432}"]
+    environment:
+      POSTGRES_USER: kfm
+      POSTGRES_PASSWORD: kfm
+      POSTGRES_DB: kfm
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "${KFM_DEV_POSTGRES_PORT:-5432}", "-U", "kfm", "-d", "kfm"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  # MinIO's own images are no longer published (2025); pgsty/minio is a maintained build of the
+  # same server, pinned by release.
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    network_mode: host
+    command: ["server", "/data", "--address", "127.0.0.1:9000", "--console-address", "127.0.0.1:9001"]
+    environment:
+      MINIO_ROOT_USER: kfm-dev
+      MINIO_ROOT_PASSWORD: kfm-dev-secret
+    volumes:
+      - minio:/data
+    restart: unless-stopped
+
+  # Creates the bucket (rclone, the tool deploy/vm/postgres-backup.sh uses), retrying until
+  # MinIO answers; a bucket that exists is fine.
+  bucket:
+    image: rclone/rclone:1.71.2
+    network_mode: host
+    depends_on: [minio]
+    command: ["mkdir", "store:kfm-ladder", "--retries", "10", "--retries-sleep", "1s"]
+    environment:
+      RCLONE_CONFIG_STORE_TYPE: s3
+      RCLONE_CONFIG_STORE_PROVIDER: Minio
+      RCLONE_CONFIG_STORE_ENDPOINT: http://127.0.0.1:9000
+      RCLONE_CONFIG_STORE_ACCESS_KEY_ID: kfm-dev
+      RCLONE_CONFIG_STORE_SECRET_ACCESS_KEY: kfm-dev-secret
+      RCLONE_CONFIG_STORE_REGION: us-east-1
+    restart: on-failure
+
+  # The bot build image (the repository's Dockerfile), built for the build worker; the service
+  # itself exits at once.
+  bot-build:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: kfm-bot-build:dev
+    command: ["true"]
+    restart: "no"
+
+  migrate:
+    <<: *ladder
+    command: ["migrate"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    <<: *ladder
+    command: ["serve"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      bucket: { condition: service_completed_successfully }
+
+  match-worker:
+    <<: *ladder
+    command: ["worker", "match"]
+    environment:
+      <<: *ladder-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      bucket: { condition: service_completed_successfully }
+
+  build-worker:
+    <<: *ladder
+    command: ["worker", "build"]
+    user: "0"
+    environment:
+      <<: *ladder-env
+      KFM_BUILD_IMAGE: kfm-bot-build:dev
+      KFM_LADDER_BUILD_DIR: /tmp/kfm-ladder-build
+      TMPDIR: /tmp/kfm-ladder-build
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/kfm-ladder-build:/tmp/kfm-ladder-build
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      bucket: { condition: service_completed_successfully }
+      bot-build: { condition: service_completed_successfully }
+
+volumes:
+  postgres:
+  minio:

@@ -1,0 +1,38 @@
+# The ladder's API and portal, `kfm-ladder serve` (architecture §11 "M7 step 3 design
+# (v0.63)"), on kfm-ladder-1 beside Postgres and Caddy. Listens on KFM_LADDER_LISTEN
+# (loopback); Caddy terminates TLS for KFM_LADDER_DOMAIN and proxies to it. Before each start
+# `kfm-ladder migrate` brings the schema to this release's (the API is the only role that
+# migrates, so updating this VM first is what updates the schema). Secrets reach the container
+# through the environment, never the command line; only the variables `serve` needs are
+# passed. The container runs as the image's unprivileged user with a read-only root.
+[Unit]
+Description=Kung Fu Monkeys ladder API and portal
+Documentation=https://github.com/minip8/kung-fu-monkeys-bots/blob/main/deploy/README.md
+Requires=docker.service
+After=docker.service network-online.target kfm-postgres.service
+Wants=network-online.target kfm-postgres.service
+StartLimitIntervalSec=0
+
+[Service]
+EnvironmentFile=/etc/kfm/ladder.env
+ExecStartPre=-/usr/bin/docker rm -f kfm-ladder-migrate kfm-ladder-api
+ExecStartPre=/usr/bin/docker run --rm --name kfm-ladder-migrate --network host \
+    --read-only --cap-drop ALL --security-opt no-new-privileges \
+    -e DATABASE_URL -e SENTRY_DSN \
+    ${KFM_IMAGE_REPO}/kfm-ladder:${KFM_IMAGE_TAG} migrate
+ExecStart=/usr/bin/docker run --rm --name kfm-ladder-api --network host \
+    --log-opt max-size=10m --log-opt max-file=3 \
+    --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
+    -e DATABASE_URL -e KFM_LADDER_LISTEN -e KFM_LADDER_PUBLIC_URL -e KFM_LADDER_SESSION_KEY \
+    -e KFM_LADDER_GITHUB_CLIENT_ID -e KFM_LADDER_GITHUB_CLIENT_SECRET \
+    -e KFM_LADDER_GOOGLE_CLIENT_ID -e KFM_LADDER_GOOGLE_CLIENT_SECRET \
+    -e KFM_LADDER_S3_ENDPOINT -e KFM_LADDER_S3_BUCKET -e KFM_LADDER_S3_ACCESS_KEY \
+    -e KFM_LADDER_S3_SECRET_KEY -e KFM_LADDER_S3_REGION -e SENTRY_DSN \
+    ${KFM_IMAGE_REPO}/kfm-ladder:${KFM_IMAGE_TAG} serve
+ExecStop=/usr/bin/docker stop -t 20 kfm-ladder-api
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

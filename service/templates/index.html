@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kung Fu Monkeys ladder</title>
+<style>
+  :root { --fg: #1d1b16; --muted: #6b6457; --bg: #fbf8f1; --card: #fff; --line: #e4ddcd; --accent: #c8761a; --bad: #a8321e; --good: #2f6b2a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #efe9dc; --muted: #a59d8d; --bg: #17150f; --card: #211e17; --line: #3a3428; --accent: #f0a040; --bad: #f08060; --good: #8fcf7f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h2 { font-size: 1.15rem; margin: 0 0 12px; }
+  p.sub { color: var(--muted); margin: 0 0 24px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 0 0 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: .95rem; }
+  th, td { text-align: left; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { color: var(--muted); font-weight: 600; }
+  form.inline { display: inline; margin: 0; }
+  form.row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+  input[type=text], select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); min-width: 0; flex: 1 1 160px; }
+  button, a.button { font: inherit; padding: 6px 12px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; text-decoration: none; display: inline-block; }
+  button.quiet { background: transparent; color: var(--accent); }
+  .error { border-color: var(--bad); color: var(--bad); }
+  .notice { border-color: var(--good); color: var(--good); }
+  code.secret { display: block; padding: 8px; margin: 8px 0; background: var(--bg); border: 1px dashed var(--accent); border-radius: 6px; word-break: break-all; }
+  .muted { color: var(--muted); }
+  .signin a.button { margin: 0 8px 8px 0; }
+  .team { margin: 0 0 16px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Kung Fu Monkeys ladder</h1>
+<p class="sub">Bots built from source and ranked in the <code>contest</code> mode. Engine release {{ engine_tag }}.</p>
+
+{% if let Some(message) = error %}<section class="error" role="alert">{{ message }}</section>{% endif %}
+{% if let Some(message) = notice %}<section class="notice">{{ message }}</section>{% endif %}
+
+{% if let Some(user) = user %}
+<section>
+  <h2>Signed in as {{ user.name }}</h2>
+  <p class="muted">User id <code>{{ user.id }}</code> (teammates add you by it or by your name).</p>
+  <table>
+    <tr><th>Provider</th><th>Account</th><th></th></tr>
+    {% for p in user.providers %}
+    <tr>
+      <td>{{ p.label }}</td>
+      {% if p.linked %}<td>{{ p.detail }}</td><td class="muted">linked</td>
+      {% else %}<td class="muted">not linked</td><td><a class="button" href="/auth/{{ p.slug }}">Link {{ p.label }}</a></td>{% endif %}
+    </tr>
+    {% endfor %}
+  </table>
+  <form class="row" method="post" action="/auth/logout">
+    <input type="hidden" name="csrf" value="{{ user.csrf }}">
+    <button class="quiet" type="submit">Sign out</button>
+  </form>
+</section>
+
+<section>
+  <h2>API tokens</h2>
+  {% if let Some(t) = new_token %}
+  <div class="notice">New {{ t.scope }} token <strong>{{ t.name }}</strong>. Copy it now: it is not shown again.
+    <code class="secret">{{ t.secret }}</code></div>
+  {% endif %}
+  {% if user.tokens.is_empty() %}<p class="muted">No tokens yet. The <code>kfm</code> command line tool sends one as a bearer.</p>
+  {% else %}
+  <table>
+    <tr><th>Name</th><th>Scope</th><th>Created</th><th>Last used</th><th></th></tr>
+    {% for t in user.tokens %}
+    <tr>
+      <td>{{ t.name }}</td><td>{{ t.scope }}</td><td>{{ t.created }}</td><td>{{ t.last_used }}</td>
+      <td><form class="inline" method="post" action="/portal/tokens/{{ t.id }}/revoke">
+        <input type="hidden" name="csrf" value="{{ user.csrf }}"><button class="quiet" type="submit">Revoke</button></form></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  <form class="row" method="post" action="/portal/tokens">
+    <input type="hidden" name="csrf" value="{{ user.csrf }}">
+    <input type="text" name="name" placeholder="Token name (laptop, CI)" maxlength="64" required>
+    <select name="scope"><option value="submit">submit</option><option value="read">read</option></select>
+    <button type="submit">Create token</button>
+  </form>
+</section>
+
+<section>
+  <h2>Teams</h2>
+  <p class="muted">An entrant is a team; a solo player is a team of one.</p>
+  {% for team in user.teams %}
+  <div class="team">
+    <strong>{{ team.name }}</strong> <span class="muted">(you: {{ team.role }}, id <code>{{ team.id }}</code>)</span>
+    <table>
+      <tr><th>Member</th><th>Role</th><th></th></tr>
+      {% for m in team.members %}
+      <tr>
+        <td>{{ m.name }}</td><td>{{ m.role }}</td>
+        <td>{% if m.is_me %}<form class="inline" method="post" action="/portal/teams/{{ team.id }}/members/{{ m.user_id }}/remove">
+            <input type="hidden" name="csrf" value="{{ user.csrf }}"><button class="quiet" type="submit">Leave</button></form>
+          {% else if team.is_owner %}<form class="inline" method="post" action="/portal/teams/{{ team.id }}/members/{{ m.user_id }}/remove">
+            <input type="hidden" name="csrf" value="{{ user.csrf }}"><button class="quiet" type="submit">Remove</button></form>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% if team.is_owner %}
+    <form class="row" method="post" action="/portal/teams/{{ team.id }}/members">
+      <input type="hidden" name="csrf" value="{{ user.csrf }}">
+      <input type="text" name="user" placeholder="User id or name" required>
+      <button type="submit">Add member</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+  <form class="row" method="post" action="/portal/teams">
+    <input type="hidden" name="csrf" value="{{ user.csrf }}">
+    <input type="text" name="name" placeholder="New team name (3 to 32 characters)" minlength="3" maxlength="32" required>
+    <button type="submit">Create team</button>
+  </form>
+</section>
+{% else %}
+<section class="signin">
+  <h2>Sign in</h2>
+  <p>Sign in with GitHub or Google. The ladder stores no password; you can link the other provider later.</p>
+  <a class="button" href="/auth/github">Sign in with GitHub</a>
+  <a class="button" href="/auth/google">Sign in with Google</a>
+</section>
+{% endif %}
+</main>
+</body>
+</html>

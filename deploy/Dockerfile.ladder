@@ -1,0 +1,88 @@
+# syntax=docker/dockerfile:1
+#
+# The ladder service image (architecture §11 "M7 step 3 design (v0.63)", deploy/README.md):
+# `kfm-ladder` from service/ plus the engine's released headless kfm_arena of the pinned
+# engine tag, which the build worker's validation and the match workers run. One image, every
+# role: the unit picks it (`serve`, `migrate`, `worker build`, `worker match`).
+#
+#   docker build -f deploy/Dockerfile.ladder -t kfm-ladder .
+#   docker build -f deploy/Dockerfile.ladder --build-arg KFM_ENGINE_TAG=v0.5.1 -t kfm-ladder .
+#   docker run --rm --network host --env-file ladder.env kfm-ladder serve
+#
+# Built from the repository root (see /.dockerignore). KFM_ENGINE_TAG defaults to
+# engine.lock's tag=; the build fails when both are empty (a ladder needs a released runner).
+# The runner is baked in, not fetched at container start: every container of one image runs
+# the same verified bytes, a worker starts without reaching GitHub, the containers can run
+# with a read-only root, and moving the ladder to another engine release is a bump of
+# engine.lock's tag= and a release of this repository (deploy/README.md "The engine release").
+
+# --- arena: the engine's kfm_arena, checked against its release's SHA256SUMS ---------------
+FROM debian:trixie-slim AS arena
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /bots
+# The same script authors use (tools/fetch_kfm_arena.sh): it downloads the Linux asset and
+# SHA256SUMS of the tag and refuses an archive whose sha256 is not the listed one.
+COPY engine.lock ./
+COPY tools/lock.sh tools/fetch_kfm_arena.sh tools/
+ARG KFM_ENGINE_TAG=
+RUN set -eu; \
+    tag="${KFM_ENGINE_TAG:-$(sed -n 's/^tag=\([^[:space:]#]*\).*/\1/p' engine.lock | tail -n 1)}"; \
+    if [ -z "$tag" ]; then \
+      echo "Dockerfile.ladder: no engine tag (engine.lock has tag= empty); pass --build-arg KFM_ENGINE_TAG=vX.Y.Z" >&2; \
+      exit 1; \
+    fi; \
+    tools/fetch_kfm_arena.sh "$tag"; \
+    install -D -m 0755 .kfm/kfm_arena /out/kfm_arena; \
+    printf '%s\n' "$tag" > /out/ENGINE_TAG; \
+    /out/kfm_arena --help > /dev/null
+
+# --- builder -----------------------------------------------------------------
+FROM rust:1.90-trixie AS builder
+
+WORKDIR /src
+COPY service/ .
+RUN cargo build --release \
+ && install -D -m 0755 target/release/kfm-ladder /out/kfm-ladder
+
+# --- runtime -----------------------------------------------------------------
+# The rust image's Debian release, so glibc matches (kfm_arena is fully static either way).
+FROM debian:trixie-slim AS runtime
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin kfm
+
+# The build worker starts the sandbox containers (architecture §8 "The build sandbox") through
+# the host's Docker socket, so it needs the client only; the other roles never call it.
+COPY --from=docker:29.8.2-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=arena /out/ /opt/kfm/engine/
+COPY --from=builder /out/kfm-ladder /usr/local/bin/kfm-ladder
+
+# The engine release this image plays. An ENV cannot read a file, so the entrypoint exports
+# KFM_LADDER_ENGINE_TAG from the build's ENGINE_TAG (the service records it on every match)
+# and refuses a different tag set by an env file while KFM_LADDER_ARENA is still the baked
+# runner, so the recorded tag and the runner that played can never disagree. Pointing
+# KFM_LADDER_ARENA at another kfm_arena (and setting its tag) is the escape hatch.
+ENV KFM_LADDER_ARENA=/opt/kfm/engine/kfm_arena
+COPY --chmod=0755 <<'EOF' /usr/local/bin/kfm-ladder-entrypoint
+#!/bin/sh
+set -eu
+baked="$(cat /opt/kfm/engine/ENGINE_TAG)"
+: "${KFM_LADDER_ENGINE_TAG:=$baked}"
+if [ "$KFM_LADDER_ENGINE_TAG" != "$baked" ] && [ "$KFM_LADDER_ARENA" = /opt/kfm/engine/kfm_arena ]; then
+  echo "kfm-ladder: KFM_LADDER_ENGINE_TAG=$KFM_LADDER_ENGINE_TAG but this image carries kfm_arena $baked;" >&2
+  echo "  unset it (the image's tag is used) or point KFM_LADDER_ARENA at a kfm_arena of that tag" >&2
+  exit 2
+fi
+export KFM_LADDER_ENGINE_TAG
+exec kfm-ladder "$@"
+EOF
+USER kfm
+EXPOSE 8090
+
+ENTRYPOINT ["kfm-ladder-entrypoint"]

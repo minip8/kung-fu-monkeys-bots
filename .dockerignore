@@ -1,4 +1,11 @@
-# The image takes sdk/ and tools/build.sh only (Dockerfile); keep the context small.
+# Build context of the two images built from the repository root: Dockerfile (the bot build
+# image: sdk/ and tools/build.sh) and deploy/Dockerfile.ladder (service/, engine.lock and the
+# kfm_arena fetch script). Everything else stays out; keep the context small.
 *
 !sdk/
 !tools/build.sh
+!service/
+service/target/
+!engine.lock
+!tools/lock.sh
+!tools/fetch_kfm_arena.sh
