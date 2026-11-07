@@ -1,5 +1,5 @@
 sdk/c/kfm_bot.h is a byte-identical copy of the engine repository's
-tools/bots/sdk-c/kfm_bot.h at engine commit 6230aa1 (the engine's main at the
+tools/bots/sdk-c/kfm_bot.h at engine commit a11e304 (the engine's main at the
 time of the copy; the header itself last changed in engine commit b5aaf22).
 
 The engine's copy stays normative: the engine's example_bot_test checks it
