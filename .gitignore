@@ -8,3 +8,6 @@
 /service/target/
 # The kfm CLI's build and wheels (cli/README.md).
 /cli/target/
+# A filled-in ladder.env must never be committed (deploy/README.md "Day one").
+/deploy/vm/ladder.env
+/deploy/vm/build.env
