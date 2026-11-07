@@ -16,6 +16,7 @@ pub mod crypto;
 pub mod db;
 pub mod error;
 pub mod extract;
+pub mod glicko;
 pub mod jobs;
 pub mod manifest;
 pub mod oauth;
