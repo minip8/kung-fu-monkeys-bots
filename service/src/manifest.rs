@@ -1,4 +1,4 @@
-//! A submission's `manifest.toml` (`docs/ladder-api.md` §9.2):
+//! A submission's `manifest.toml` (`docs/ladder-api.md` §9.1):
 //!
 //! ```toml
 //! language = "cpp"     # the only ladder language; "c" is an alias that builds the same way

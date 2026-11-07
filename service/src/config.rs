@@ -1,5 +1,5 @@
 //! Configuration: environment variables only, never a file in the image
-//! (architecture v0.63 §11 "M7 step 3 design"). `docs/ladder-api.md` §9 and
+//! (architecture v0.63 §11 "M7 step 3 design"). `docs/ladder-api.md` §12 and
 //! `service/README.md` list every variable.
 
 use std::fmt;
@@ -38,7 +38,7 @@ pub struct OAuthApp {
 }
 
 /// The S3-compatible object store (Cloudflare R2 in production, MinIO in
-/// tests). Read and validated now; used from step 3b.
+/// tests): sources, modules and logs (step 3b), replays (step 4).
 #[derive(Clone)]
 pub struct S3Config {
     pub endpoint: Url,
