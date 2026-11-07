@@ -1,12 +1,13 @@
-# Kung Fu Monkeys ladder API v1.2
+# Kung Fu Monkeys ladder API v1.3
 
 Status: normative, append-only from v1.0 (2026-11-07, M7 step 3a, engine architecture v0.63);
 v1.1 (2026-11-07, M7 step 3b) serves submissions; v1.2 (2026-11-07, M7 step 4) serves seasons,
-the scheduler's matches, the ratings and the ladder (§10).
+the scheduler's matches, the ratings and the ladder (§10); v1.3 (2026-11-07, M7 step 5) serves
+the `kfm` CLI's login (§5.1).
 The design and its rationale are the engine's `docs/architecture.md` §8 "The ladder" and §11
 "M7 step 3 design". This file is the HTTP surface shared by the service (`service/`, the
 `kfm-ladder` binary), its portal and the `kfm` command line tool; change it here first. Every
-route below is served as of v1.2.
+route below is served as of v1.3.
 
 ## 1. Transport and conventions
 
@@ -61,6 +62,7 @@ The service never puts internals (SQL, a provider's reply, a path) in either. Co
 | `already_linked` | 409 | The signed-in account already has another identity of this provider. |
 | `limit_reached` | 409 | A cap was reached: 25 live tokens per user, 32 members per team. |
 | `not_ready` | 409 | Only a `ready` submission can be made active (v1.1). |
+| `invalid_code` | 400 | A CLI login code that is malformed, unknown, already exchanged or expired (v1.3, §5.1). |
 | `too_large` | 413 | An upload is over its cap: 4 MiB of `source.zip` (v1.1). |
 | `rate_limited` | 429 | A team submits at most once a minute (v1.1). |
 | `oauth_failed` | 502 | The provider's reply could not be obtained or verified (token exchange, profile, id token). |
@@ -97,7 +99,8 @@ their state cookie instead).
 
 ### 3.3 API tokens
 
-A token is created on the portal (§6), shown once and never again, and sent as
+A token is created on the portal (§6) or by the CLI's login (§5.1), shown once and never
+again, and sent as
 
 ```
 Authorization: Bearer kfm_<43 characters>
@@ -144,10 +147,16 @@ links the other).
 | `GET /auth/github/callback` | none (state cookie) | The provider's redirect target. |
 | `GET /auth/google/callback` | none (state cookie) | The provider's redirect target. |
 | `POST /auth/logout` | session (CSRF) | Ends the session. |
+| `GET /auth/cli` | none (a session to confirm) | The CLI login's page (v1.3, §5.1). |
+| `POST /auth/cli` | session (CSRF, form) | Confirms or cancels a CLI login (v1.3, §5.1). |
+| `POST /auth/cli/exchange` | none (the code) | A CLI login's code for its token (v1.3, §5.1). |
 
 A start sets the cookie `kfm_oauth` (`Path=/auth`, `HttpOnly`, `SameSite=Lax`, `Secure` under
 https, 10 minutes): the provider, the `state` value, the PKCE verifier and (Google) the nonce,
-signed with the session key. The callback requires that cookie, unexpired, for the same
+signed with the session key, and the page to come back to (v1.3: a start may take `?next=`,
+kept only when it is the CLI login's page, a path starting `/auth/cli?` of printable ASCII
+without `//` or a backslash, at most 512 bytes; any other `next` is ignored). The callback
+requires that cookie, unexpired, for the same
 provider, with the same `state` as the query; it always clears it. Then the code is exchanged;
 GitHub's profile comes from `GET /user` (and `GET /user/emails` when the email is hidden: the
 primary verified one), Google's from the id token, verified against Google's published keys,
@@ -160,15 +169,58 @@ issuer, audience, expiry and nonce. The account rule:
 3. Otherwise: create a user named after the identity (GitHub's login, Google's name; at most
    64 characters, `player` if empty) and sign in.
 
-Creating an account creates no team (§7). A callback always answers `303`: to `/` after a
-sign-in, to `/?linked=<provider>` after a link, to `/?error=<code>` on failure (`oauth_state`,
+Creating an account creates no team (§7). A callback always answers `303`: to the start's
+`next` after a sign-in or a link when it had one (v1.3), else to `/` after a sign-in and to
+`/?linked=<provider>` after a link, to `/?error=<code>` on failure (`oauth_state`,
 `oauth_denied`, `oauth_failed`, `already_linked`), with the session cookie set when a new
-session starts. The CLI's `login` (step 5) is this flow ending in a token; it is not part of
-v1.0.
+session starts.
 
 `POST /auth/logout` takes the CSRF token as the `X-CSRF-Token` header or a urlencoded `csrf`
 field, deletes the session, clears the cookie and answers `303` to `/`. Without a session it
 just clears the cookie.
+
+### 5.1 The CLI's login (v1.3)
+
+`kfm login` gets a token through the browser with a local redirect, the flow of `gh auth login`
+and of OAuth for native apps (RFC 8252 §7.3), with the ladder's own sign-in in front:
+
+1. The CLI listens on `127.0.0.1` on an ephemeral port, makes a `state` of at least 128 random
+   bits, and opens (and prints, for a machine without a browser)
+   `<origin>/auth/cli?port=<port>&state=<state>&host=<host name>`.
+2. `GET /auth/cli` checks the query: `port` a number from 1024 to 65535, `state` 8 to 128
+   characters of `A-Z a-z 0-9 - _ . ~`, `host` optional (control characters dropped, whitespace
+   collapsed). A bad query is a `400` page saying so. Signed out, the page links to both
+   sign-ins with `?next=` set to itself (§5), so the browser comes back after signing in.
+   Signed in, it asks **"Authorize the kfm CLI on this computer?"**: it creates a `submit` token
+   named `kfm on <host>` (`kfm CLI` without a host; cut to 64 characters), with a form of the
+   session's CSRF token, the three parameters and the buttons `decision=allow` and `deny`.
+3. `POST /auth/cli` (a portal form, §8). Without a session it answers `303` to
+   `/?error=unauthenticated`, with a missing or wrong `csrf` to `/?error=bad_csrf`, with a bad
+   port or state to `/?error=bad_request`: nothing is created and the browser never reaches the
+   listener. Otherwise it answers `303` to the listener,
+   `http://127.0.0.1:<port>/callback?state=<state>` followed by `&code=<code>` on `allow`
+   (the token is created now, visible in `GET /tokens` and on the portal),
+   `&error=access_denied` on a cancel, or `&error=<code>` when the token could not be made
+   (`limit_reached`, `internal`). The page's `Content-Security-Policy` adds
+   `http://127.0.0.1:*` to `form-action` so the browser follows that redirect.
+4. The listener checks that `state` is its own and answers the browser with a page of its
+   own; the CLI then sends `POST /auth/cli/exchange` with `{"code":"<code>"}` (auth: none; the
+   code is the credential) and gets `200`:
+
+```json
+{"token":"kfm_…","token_id":"…","name":"kfm on laptop","scope":"submit"}
+```
+
+The code is 128 random bits in unpadded base64url (22 characters), **single use** (the
+exchange deletes it whatever the outcome) and valid for **5 minutes**. The service stores the
+SHA-256 of the code, never the code, bound to the token it unlocks: the row holds the token's
+id and its secret sealed under the code (XORed with a SHA-512 of a purpose string and the
+code), so neither a database dump nor a log of the browser's URLs yields a usable token, and
+the exchange checks the unsealed secret against the token's stored hash. A code that is
+malformed, unknown, already exchanged or expired is `invalid_code`; an expired code's token,
+never handed out, is revoked (at its exchange, or when anyone next confirms a login).
+`kfm logout` revokes the CLI's token with `DELETE /tokens/{token_id}` sent with that token as
+its bearer (§6, v1.3), then forgets it.
 
 ## 6. The caller and tokens
 
@@ -217,12 +269,15 @@ only time the secret is sent:
 | `created_at` | time | always | |
 | `last_used_at` | time or null | always | The last request it authenticated. |
 
-### `DELETE /tokens/{id}` (auth: session)
+### `DELETE /tokens/{id}` (auth: session, or that token itself)
 
 Revokes the caller's token: `204`. Revoked tokens are kept (the record of use) but never listed
-or accepted again; a token that is not the caller's or already revoked is `not_found`.
+or accepted again; a token that is not the caller's or already revoked is `not_found`. From
+v1.3 a token may revoke itself (the bearer is the token `{id}` names, either scope, so `kfm
+logout` needs no session); a bearer naming another token is `session_required`, as before.
 
-Tokens are managed only through the session, so a leaked token cannot mint another.
+Tokens are managed only through the session (beyond a token revoking itself), so a leaked
+token cannot mint or revoke another.
 
 ## 7. Teams
 
@@ -480,7 +535,9 @@ kfm-ladder season list      # name, start, end, mode, id; "current" on the curre
 A name is 1 to 64 characters of ASCII letters, digits, space, `-`, `_` and `.`, starting and
 ending with a letter or digit, unique; a mode is 1 to 32 characters of `a-z`, `0-9` and `_`.
 
-`GET /seasons`: `200 {"seasons":[<season>…]}`, the latest start first. A season object:
+`GET /seasons`: `200 {"seasons":[<season>…],"engine_tag":"v0.5.1"}`, the latest start first.
+`engine_tag` (v1.3) is the engine release the service plays new games with
+(`KFM_LADDER_ENGINE_TAG`, §10.4), the one `kfm test` fetches by default. A season object:
 
 | Key | Type | Present | Meaning |
 |---|---|---|---|
@@ -647,6 +704,7 @@ then.
 | v1.0 | Health, GitHub and Google sign-in with linking, sessions and CSRF, `/me`, tokens and scopes, teams, the portal; submissions, the ladder and matches reserved. |
 | v1.1 | Submissions served (§9): the upload, list, show, log and activate routes, the manifest and archive rules, the states, build and validation, retention; the team object's `active`; the codes `bad_manifest`, `bad_source`, `too_large`, `rate_limited`, `not_ready`; the portal's upload and activate forms. Refined from the reserved shapes: the upload answers `202` with the whole submission (not `201` with three keys: nothing is built yet), the submission object adds `updated_at`, `language` and `entry`, and the list is what retention keeps (in-flight ones included, pruned ones left out). |
 | v1.2 | Seasons, the scheduler, the match job, ratings and the board served (§10): `GET /seasons`, `GET /ladder`, `GET /matches`, `GET /matches/{m}` and their portal pages; the team object's `rating`; the submission object's `ranked_games` and `ranked_faults`; `kfm-ladder season create|list`. Refined from the reserved shapes: the board's rows are `rank`, `rd` (not `deviation`), the record and the active module's hash, with `page` beside `next`; a match is one game of a pair's two-game run, with its sides, faults and rating changes; `GET /ladder` and `GET /matches/{m}` answer HTML to a browser. |
+| v1.3 | The `kfm` CLI's login (§5.1): `GET /auth/cli`, `POST /auth/cli`, `POST /auth/cli/exchange`; a sign-in start's `?next=` (the CLI page only); the code `invalid_code`; `DELETE /tokens/{id}` with that token as the bearer (a token revokes itself); `GET /seasons`' `engine_tag`. |
 
 ## 12. Configuration of the binary
 
