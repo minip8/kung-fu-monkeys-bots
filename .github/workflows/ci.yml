@@ -4,7 +4,8 @@ name: CI
 # build image builds, every examples/*/ builds in the sandbox, and the same examples built
 # without docker (tools/build.sh with the same emsdk) are byte-identical to the sandbox's.
 # play: every sandbox-built module plays against the reference bot without a fault. A
-# repository without examples/*/ passes with a notice.
+# repository without examples/*/ passes with a notice. service: the ladder service's format,
+# clippy and tests (service/README.md) against a postgres:17 service container.
 
 on:
   push:
@@ -89,3 +90,36 @@ jobs:
       - name: Play every module against the reference bot
         if: steps.modules.outputs.any
         run: tools/play.sh .kfm/kfm_arena $(cat out/sandbox/MODULES.txt)
+
+  service:
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      # #[sqlx::test] creates (and drops) one database per test on this server.
+      DATABASE_URL: postgres://postgres:dev@127.0.0.1:5432/postgres
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: service
+      - name: Format
+        run: cargo fmt --check --manifest-path service/Cargo.toml
+      - name: Clippy
+        run: cargo clippy --manifest-path service/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --manifest-path service/Cargo.toml --locked
