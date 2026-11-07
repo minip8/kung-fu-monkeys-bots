@@ -228,8 +228,8 @@ for production). Homepage URL: `<PUBLIC_URL>`; Authorization callback URL:
 `read:user user:email` and keys the account on the numeric GitHub user id.
 
 **Google.** Google Cloud Console > APIs & Services. OAuth consent screen: user type External,
-the app name and support email, the scopes `openid`, `email` and `profile` (non-sensitive, so no
-verification review), then publish it (in Testing only the listed test users can sign in).
+the app name and support email, the privacy policy URL `<PUBLIC_URL>/privacy`, the scopes
+`openid`, `email` and `profile` (non-sensitive, so no verification review), then publish it (in Testing only the listed test users can sign in).
 Credentials > Create credentials > OAuth client ID > Web application; Authorised redirect URI:
 `<PUBLIC_URL>/auth/google/callback`. The client id and secret are
 `KFM_LADDER_GOOGLE_CLIENT_ID` and `KFM_LADDER_GOOGLE_CLIENT_SECRET`. The service discovers

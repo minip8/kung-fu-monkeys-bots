@@ -2,7 +2,7 @@
 # ladder's public name, everything proxied to `kfm-ladder serve` on loopback (the API and the
 # portal are one binary). KFM_LADDER_DOMAIN comes from /etc/kfm/ladder.env through the drop-in
 # install.sh writes (caddy.service.d/kfm-ladder.conf).
-{$KFM_LADDER_DOMAIN:ladder.kfm.minip8.com} {
+{$KFM_LADDER_DOMAIN:bots.kfm.minip8.com} {
 	# A submission is at most 4 MiB of source plus its manifest (docs/ladder-api.md); the
 	# service enforces the exact cap, this only stops a stream of junk at the door.
 	request_body {
