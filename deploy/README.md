@@ -121,6 +121,15 @@ the same path inside and outside (`KFM_LADDER_BUILD_DIR`, and `TMPDIR` too).
    sudo docker run --rm --network host --env-file /etc/kfm/ladder.env \
      ghcr.io/minip8/kfm-ladder:v0.1.0 migrate
    ```
+   **Seasons.** Nothing is scheduled until a season holds now. A season is made (or listed) on
+   the ladder VM with the same image (`docs/ladder-api.md` §10.1; windows never overlap):
+   ```sh
+   sudo docker run --rm --network host --env-file /etc/kfm/ladder.env ghcr.io/minip8/kfm-ladder:v0.1.0 \
+     season create 2026-12 --start 2026-12-01T00:00:00Z --end 2027-01-01T00:00:00Z
+   sudo docker run --rm --network host --env-file /etc/kfm/ladder.env ghcr.io/minip8/kfm-ladder:v0.1.0 season list
+   ```
+   The API's scheduler then makes a round every `KFM_LADDER_ROUND_SECONDS` (default 300) and
+   the match workers play it.
 10. **Automatic updates.** The engine's `deploy/gcp/setup_deploy_identity.sh`, run from an
     engine checkout for this repository, adds a second provider to the same pool and service
     account (its first provider admits only the engine repository):
@@ -183,7 +192,9 @@ without reaching GitHub, and the containers keep a read-only root. Moving the se
 engine release is the pin bump of `docs/build.md` (`engine.lock`'s `tag=` and `commit=`, the
 SDK header) and a release of this repository; the env files never name the engine. A
 container whose env sets `KFM_LADDER_ENGINE_TAG` to another tag while using the baked runner
-refuses to start, so the recorded tag and the runner can never disagree.
+refuses to start, so the recorded tag and the runner can never disagree. Inside a season the ratings carry
+over a new engine: each team's deviation widens before its first game under the new tag
+(`docs/ladder-api.md` §10.4).
 
 ## Backups and restore
 

@@ -1,13 +1,12 @@
-# Kung Fu Monkeys ladder API v1.1
+# Kung Fu Monkeys ladder API v1.2
 
 Status: normative, append-only from v1.0 (2026-11-07, M7 step 3a, engine architecture v0.63);
-v1.1 (2026-11-07, M7 step 3b) serves submissions.
+v1.1 (2026-11-07, M7 step 3b) serves submissions; v1.2 (2026-11-07, M7 step 4) serves seasons,
+the scheduler's matches, the ratings and the ladder (§10).
 The design and its rationale are the engine's `docs/architecture.md` §8 "The ladder" and §11
 "M7 step 3 design". This file is the HTTP surface shared by the service (`service/`, the
-`kfm-ladder` binary), its portal and the `kfm` command line tool; change it here first. The
-routes marked **reserved** (§10) are not served yet (they answer `not_found`); their shapes are fixed
-here so the CLI can be written against the whole surface, and a later step may still refine a
-reserved route before it is served.
+`kfm-ladder` binary), its portal and the `kfm` command line tool; change it here first. Every
+route below is served as of v1.2.
 
 ## 1. Transport and conventions
 
@@ -248,6 +247,7 @@ A team object:
 | `members[].role` | string | always | `"owner"` or `"member"`. |
 | `members[].joined_at` | time | always | |
 | `active` | id or null | always | The team's active submission (§9.5), `null` before one is set (v1.1). |
+| `rating` | object or null | always | The team's standing in the current season (v1.2, §10.5): `{"season","rank","rating","rd","games","wins","draws","losses"}` as a board row has them; `null` outside a season and before the team's first game in it. |
 
 | Method and path | Auth | Request | Response |
 |---|---|---|---|
@@ -273,7 +273,9 @@ The portal is the same service rendered as HTML (askama templates, no JavaScript
 
 | Method and path | What |
 |---|---|
-| `GET /` | Signed out: sign in with GitHub or Google. Signed in: the account and its identities (a link button for the provider not yet linked), tokens (create, revoke), teams (create, add member, leave or remove) and each team's submissions (upload, the list with state, module hash, error and a link to the log, an Activate button on ready ones, the active one marked; v1.1). Shows `?error=<code>` as the code's message (with the `&detail=` text for `bad_manifest` and `bad_source`, v1.1) and `?linked=<provider>` as a notice. |
+| `GET /` | Signed out: sign in with GitHub or Google. Signed in: the account and its identities (a link button for the provider not yet linked), tokens (create, revoke), teams (create, add member, leave or remove) and each team's submissions (upload, the list with state, module hash, error, ranked games and faults and a link to the log, an Activate button on ready ones, the active one marked; v1.1), its standing in the current season and its last ten games with links to their pages (v1.2). Shows `?error=<code>` as the code's message (with the `&detail=` text for `bad_manifest` and `bad_source`, v1.1) and `?linked=<provider>` as a notice. |
+| `GET /ladder` | With `Accept: text/html` (a browser): the board of §10.5 as a page, paged, with links to every season (v1.2). |
+| `GET /matches/{m}` | With `Accept: text/html`: the game's page: both sides with score, kills, deaths, rating change and faults, the replay's download link, the viewer link, the seed and hashes to re-run it, and the raw result (v1.2). |
 | `POST /portal/tokens` | Form `csrf`, `name`, `scope`: creates a token and renders `/` with its secret, once. |
 | `POST /portal/tokens/{id}/revoke` | Form `csrf`. |
 | `POST /portal/teams` | Form `csrf`, `name`. |
@@ -288,7 +290,10 @@ answers `303` to `/` on success and to `/?error=<code>` on failure (the codes of
 `/?error=<code>&detail=<text>` for a refused upload), except a created token, which renders the
 page (`200`). Portal pages are sent with `Cache-Control: no-store`, a `Content-Security-Policy` that
 allows no script, `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. The
-`/portal/...` routes are for the portal's own forms; programs use the JSON routes.
+`/portal/...` routes are for the portal's own forms; programs use the JSON routes. `GET /ladder` and
+`GET /matches/{m}` answer HTML only to a request whose `Accept` header lists `text/html` (what a
+browser's navigation sends); without it, or with `*/*` or `application/json`, they answer the
+JSON of §10, so a link to either works for a person and a program alike (v1.2).
 
 ## 9. Submissions
 
@@ -366,6 +371,8 @@ starting `the build could not be completed:` or `the validate could not be compl
 | `log_url` | string or null | always | A presigned URL of the build and validation log on the object store, valid for 15 minutes from the response; `null` before a log exists and once retention pruned it (§9.7). |
 | `error` | string or null | always | Why it is `failed` or `rejected`, one line for a person; `null` otherwise. |
 | `active` | bool | always | Whether it is its team's active submission. |
+| `ranked_games` | number | always | Ranked games it played (v1.2, §10.3). |
+| `ranked_faults` | number | always | Of those, the games in which one of its slots faulted (v1.2, §10.3). |
 
 ### 9.5 Routes
 
@@ -426,8 +433,11 @@ removed by name). The only result that counts is `OUT/bot.wasm`: the module is s
    memory, table or global; one 32-bit memory of its own with an initial size of at most 256
    pages (16 MiB); the exports `memory`, `kfm_abi_version : () -> i32`,
    `kfm_obs_buffer : () -> i32`, `kfm_init : (i64, i32) -> ()` and `kfm_act : (i32) -> i64`;
-2. plays one smoke match with the season's released `kfm_arena`, `kfm_arena --mode contest
-   --team <module> --team ref:hard --matches 1 --ticks 3600 --json --result <file> --quiet`,
+2. plays one smoke match with the season's released `kfm_arena` in the ranked shape (5v5,
+   v1.2: the module fills its five slots against five `ref:hard`; before, 1v1, which costs
+   less fuel per tick than a ranked game), `kfm_arena --mode contest --team <module>,<module>,
+   <module>,<module>,<module> --team ref:hard,ref:hard,ref:hard,ref:hard,ref:hard --matches 1
+   --ticks 3600 --json --result <file> --quiet`,
    and reads its match objects (the engine's `docs/arena-result.md`): a module slot with
    `traps`, `over` or `bad` above 0, or `dead` not null, rejects the submission, and so does
    `kfm_arena` refusing the module at load (exit 3).
@@ -446,16 +456,181 @@ and so does the active one; every older finished submission loses both objects (
 seed and modules; queued and building submissions are never pruned; the row stays, and
 `GET /submissions/{s}` keeps showing its state and hash.
 
-## 10. Reserved routes
+## 10. Seasons, matches and the ladder
 
-Not served in v1.1; the shapes below are the design's (architecture v0.63) and become
-normative when a later version of this document serves them.
+Served from v1.2 (architecture §8 "Matches and ratings", §11 "Scheduling and ratings"; v0.59: a
+season is a time window, every game records its engine release, ratings persist across a
+release with the deviation widened). Every route in this section is public (auth: none): the
+ratings, the results and the replays are the contest's record.
 
-| Method and path | Auth | Step | What |
+### 10.1 Seasons
+
+A season is a time window `[starts_at, ends_at)` and the content mode its games play
+(`contest`). Windows never overlap (the database refuses an overlapping one), so at most one
+season is **current**: the one whose window holds now. Nothing is scheduled outside a season;
+a season's board freezes at its end (a match job that starts after the end records nothing,
+§10.3), and a new season starts every rating afresh. Seasons are made by an operator on the
+service's VM, never over HTTP (there is no admin role):
+
+```sh
+kfm-ladder season create 2026-12 --start 2026-12-01T00:00:00Z --end 2027-01-01T00:00:00Z [--mode contest]
+kfm-ladder season list      # name, start, end, mode, id; "current" on the current one
+```
+
+A name is 1 to 64 characters of ASCII letters, digits, space, `-`, `_` and `.`, starting and
+ending with a letter or digit, unique; a mode is 1 to 32 characters of `a-z`, `0-9` and `_`.
+
+`GET /seasons`: `200 {"seasons":[<season>…]}`, the latest start first. A season object:
+
+| Key | Type | Present | Meaning |
 |---|---|---|---|
-| `GET /ladder` | none | 4 | The season's ratings, paged: `{"season","ratings":[{"team_id","name","rating","deviation","games"}…],"next"}`. |
-| `GET /matches?team=<t>` | none | 4 | A team's matches, newest first, paged. |
-| `GET /matches/{m}` | none | 4 | A match: `seed`, `engine_tag`, `content_hash`, both sides (team and submission ids), the parsed result (the engine's `docs/arena-result.md` match object), `replay_url` and `viewer_url` (`https://kfm.minip8.com/<tag>/?replay=<url>`, step 6). |
+| `id` | id | always | |
+| `name` | string | always | |
+| `mode` | string | always | The content mode its games play. |
+| `starts_at` | time | always | The window's first instant. |
+| `ends_at` | time | always | The window's end, exclusive: the board freezes here. |
+| `current` | bool | always | Whether the window holds now. |
+
+### 10.2 Scheduling
+
+`kfm-ladder serve` runs the scheduler in the background. Of several API instances one
+schedules: it holds a Postgres session advisory lock (`pg_try_advisory_lock`) on a connection
+of its own and makes rounds over that connection only; the others stay idle until it goes. A
+**round** is due once the current season's last round is `KFM_LADDER_ROUND_SECONDS` old
+(default 300, judged on the database's clock, so a restart neither skips nor doubles one).
+Rounds are numbered from 1 within a season. A round:
+
+1. takes every team whose active submission is `ready` (§9.3) and sorts them by their rating
+   in the season, highest first (1500 for a team not yet rated), ties by team id. Fewer than
+   two such teams: no round. A team that changed its active submission plays the new one; the
+   rating stays the team's;
+2. pairs them in k passes, k = `KFM_LADDER_ROUND_OPPONENTS` (default 3). In each pass a team
+   is in at most one new pair; the pass walks the teams from the top in rank order, except that
+   teams with fewer pairs so far walk first (the team an odd pass left out leads the next), and
+   each team without a pair in this pass takes the team nearest to it by rating that is also
+   free in this pass, has fewer than k pairs and has not met it in this round (ties go to the
+   higher ranked). So a team is in at most k pairs and a round of n teams has at most n·k/2;
+3. counts a pair whose match job is still queued or running as made, but queues nothing for it
+   (a backlog of workers never grows the queue);
+4. queues one `match` job per new pair, side A the higher ranked, with the seed: the first 8
+   bytes of SHA-256 over `kfm-ladder match seed v1\0`, the season id's 16 bytes, the round
+   number (big-endian i32) and the two submission ids' bytes (A's first), read big-endian and
+   shifted right by 2, so it is below 2^62 and the second game's seed (+1) fits as well.
+
+### 10.3 The match job
+
+A match worker (`kfm-ladder worker match`) claims the job, fetches both modules from the object
+store (checked against their recorded SHA-256), and runs the season's released `kfm_arena`
+once, in a fresh directory holding the modules as `<submission>.wasm`:
+
+```
+kfm_arena --mode <season's mode> --team A,A,A,A,A --team B,B,B,B,B --matches 2 --rotate
+  --seed <seed> --ticks <KFM_LADDER_MATCH_TICKS> --json --result result.jsonl --replay-dir replays --quiet
+```
+
+Each side's module fills all five slots of its team (the contest is 5v5; `--team` takes one
+spec per slot). `--rotate` makes the second game swap the sides, so one run plays the pair from
+both sides: two **games**, each recorded as one match (game 0 with seed S, game 1 with S + 1).
+Per game the worker reads the match object of the engine's `docs/arena-result.md`, stores its
+replay at `replays/<match>.kfmr`, and in one transaction inserts the match and updates both
+teams' ratings (§10.4) and both submissions' `ranked_games` and `ranked_faults`.
+
+A **fault in a ranked game** (a module slot with `traps`, `over` or `bad` above 0, or `dead`
+not null) is recorded on the match (the side's `faults`) and counted on the submission
+(`ranked_faults`: the games with at least one faulty slot); it never rejects the submission,
+which passed validation (§9.6), and the game counts as played: the engine substituted "repeat
+last input" for the faulty ticks, which is the bot's loss to bear.
+
+`kfm_arena` exiting non-zero, or leaving no result, no summary line, not exactly games 0 and 1
+or a replay missing, fails the attempt; the job is retried like any other (three attempts in
+all). A game already recorded by an earlier attempt is never recorded again (one row per job
+and game), and the run is deterministic, so a retry records what the first attempt would have.
+A job that starts after its season's end records nothing. A pair whose job failed for good is
+simply paired again in a later round.
+
+### 10.4 Ratings
+
+The rating is Glicko-2 (Glickman, "Example of the Glicko-2 system") per team and season, with
+τ = 0.5, a new team at rating 1500, deviation (RD) 350 and volatility 0.06, the Glicko-2 scale
+μ = (r − 1500) / 173.7178, φ = RD / 173.7178, and the volatility found by the Illinois
+iteration to 10^-6. Each game is its own rating period of one game: both teams are updated
+against each other's rating from before the game, a win scoring 1, a loss 0, and a draw (a game
+that ended without a winner, or that the tick cap ended) 0.5. A period batched per round is a
+later refinement.
+
+At an engine release a team's deviation widens before its first game under the new release:
+when the release the service runs (`KFM_LADDER_ENGINE_TAG`) differs from the release of the
+team's last rated game, RD' = min(350, sqrt(RD² + 100²)) first; the rating itself is kept (a
+release is the same shock to every entrant, never a reset).
+
+Ratings are kept unrounded; the API shows `rating` and `rd` on Glicko's scale rounded to whole
+numbers, and a game's `rating_change` to a tenth.
+
+### 10.5 The board: `GET /ladder?season=<name>&page=<n>`
+
+`season` names a season (`not_found` if none has that name); without it, the current season,
+else the season that started last (frozen at its end). `page` is 1-based (default 1;
+`bad_request` below 1 or not a number), 50 teams a page. `200`:
+
+```json
+{"season":<season>,"page":1,"ratings":[{"rank":1,"team_id":"…","name":"Banana Squad","rating":1712,
+ "rd":64,"games":40,"wins":28,"draws":3,"losses":9,"active":"…","module_hash":"…"}…],"next":2}
+```
+
+Before any season has begun: `{"season":null,"page":1,"ratings":[],"next":null}`. The board
+holds the teams with at least one game in the season, by rating (unrounded), then the smaller
+deviation, then the team id; `rank` counts from 1 across pages. `next` is the next page's
+number, or `null` on the last.
+
+| Key | Type | Present | Meaning |
+|---|---|---|---|
+| `rank` | number | always | The place on the board. |
+| `team_id`, `name` | id, string | always | |
+| `rating`, `rd` | number | always | The rating and its deviation, rounded (§10.4). |
+| `games`, `wins`, `draws`, `losses` | number | always | The team's games in the season. |
+| `active` | id or null | always | The team's active submission now (not necessarily the one that played every game). |
+| `module_hash` | string or null | always | The active submission's module SHA-256 (64 hex digits). |
+
+### 10.6 Matches: `GET /matches?team=<t>&season=<name>&page=<n>` and `GET /matches/{m}`
+
+A **match** is one recorded game. `GET /matches` lists them newest first, 25 a page, of every
+team and season unless `team` (an id, either side; `bad_request` if not a UUID) or `season` (a
+name; `not_found` if unknown) narrows it: `200 {"page":1,"matches":[<match>…],"next":2}`. A
+match object:
+
+| Key | Type | Present | Meaning |
+|---|---|---|---|
+| `id` | id | always | |
+| `season`, `season_id` | string, id | always | Its season. |
+| `round` | number | always | The scheduler's round number in the season. |
+| `game` | number | always | 0 or 1: the game of its pair's run (1 has the sides swapped). |
+| `created_at` | time | always | When it was recorded. |
+| `engine_tag` | string | always | The engine release it ran under (`v0.5.1`): re-run it with that release's `kfm_arena`. |
+| `seed` | number | always | The game's world seed (`--seed`). |
+| `ticks` | number | always | Sim ticks it ran. |
+| `end` | string | always | `ended`, or `cap` (the tick cap ended it: a draw). |
+| `winner` | id or null | always | The winning team; `null` for a draw. |
+| `sides` | array | always | Two sides, side A (the higher ranked when scheduled) first. |
+| `sides[].team_id`, `sides[].name` | id, string | always | |
+| `sides[].submission_id` | id | always | The submission that played. |
+| `sides[].team` | number | always | The mode's team index the side played (0 or 1). |
+| `sides[].score`, `kills`, `deaths` | number | always | The side's `teams[]` entry in the result. |
+| `sides[].faults` | array | always | One `{"slot","traps","over","bad","dead"}` per faulty module slot of the side (§10.3); empty when clean. |
+| `sides[].rating_change` | number | always | The side's rating change from this game, to a tenth. |
+
+`GET /matches/{m}`: `200`, the match object plus:
+
+| Key | Type | Present | Meaning |
+|---|---|---|---|
+| `content_hash`, `build_hash` | string, string or null | always | The result's two hashes (8 hex digits). |
+| `result` | object | always | The match object `kfm_arena` printed, whole (the engine's `docs/arena-result.md`; its specs are `<submission>.wasm`). |
+| `replay_url` | string or null | always | A presigned URL of the `.kfmr` on the object store, valid for one hour from the response. |
+| `viewer_url` | string or null | always | `<KFM_LADDER_VIEWER_URL>/<engine_tag>/?replay=<replay_url, URL-encoded>`: the replay in the client of the game's own release (`https://kfm.minip8.com/v0.5.1/?replay=…`). |
+
+The viewer itself is the browser client's replay-by-URL feature, M7 step 6: until it lands
+the link opens the release's page without playing the replay. The client fetches the replay
+from the object store's presigned URL, so the bucket must allow that origin's GET (CORS) by
+then.
 
 ## 11. Versioning
 
@@ -471,16 +646,19 @@ normative when a later version of this document serves them.
 |---|---|
 | v1.0 | Health, GitHub and Google sign-in with linking, sessions and CSRF, `/me`, tokens and scopes, teams, the portal; submissions, the ladder and matches reserved. |
 | v1.1 | Submissions served (§9): the upload, list, show, log and activate routes, the manifest and archive rules, the states, build and validation, retention; the team object's `active`; the codes `bad_manifest`, `bad_source`, `too_large`, `rate_limited`, `not_ready`; the portal's upload and activate forms. Refined from the reserved shapes: the upload answers `202` with the whole submission (not `201` with three keys: nothing is built yet), the submission object adds `updated_at`, `language` and `entry`, and the list is what retention keeps (in-flight ones included, pruned ones left out). |
+| v1.2 | Seasons, the scheduler, the match job, ratings and the board served (§10): `GET /seasons`, `GET /ladder`, `GET /matches`, `GET /matches/{m}` and their portal pages; the team object's `rating`; the submission object's `ranked_games` and `ranked_faults`; `kfm-ladder season create|list`. Refined from the reserved shapes: the board's rows are `rank`, `rd` (not `deviation`), the record and the active module's hash, with `page` beside `next`; a match is one game of a pair's two-game run, with its sides, faults and rating changes; `GET /ladder` and `GET /matches/{m}` answer HTML to a browser. |
 
 ## 12. Configuration of the binary
 
-`kfm-ladder serve` (API and portal; runs pending migrations first), `kfm-ladder migrate` (apply
-migrations and exit), `kfm-ladder worker build` (build and validate jobs, §9.6) and
-`kfm-ladder worker match` (match jobs; until step 4 each fails as "not implemented (M7 step
-4)"). Workers never migrate, and stop on SIGTERM once the job in hand is done. Configuration is
-the environment only, per role: `migrate` reads only `DATABASE_URL` (and `SENTRY_DSN`); a worker
-never reads the session key, the OAuth apps, the public URL or the listen address, and
-`worker build` also needs `KFM_BUILD_IMAGE`, `KFM_LADDER_BUILD_DIR` (an absolute path) and
-`KFM_LADDER_ARENA`; `serve` needs the full set. A missing or
+`kfm-ladder serve` (API and portal, and the scheduler, §10.2; runs pending migrations first),
+`kfm-ladder migrate` (apply migrations and exit), `kfm-ladder season create|list` (§10.1; applies
+migrations first), `kfm-ladder worker build` (build and validate jobs, §9.6) and `kfm-ladder
+worker match` (match jobs, §10.3). Workers never migrate, and stop on SIGTERM once the job in
+hand is done. Configuration is the environment only, per role: `migrate` and `season` read only
+`DATABASE_URL` (and `SENTRY_DSN`); a worker never reads the session key, the OAuth apps, the
+public URL or the listen address; `worker build` also needs `KFM_BUILD_IMAGE`,
+`KFM_LADDER_BUILD_DIR` (an absolute path) and `KFM_LADDER_ARENA`, and `worker match` needs
+`KFM_LADDER_ARENA` (and may set `KFM_LADDER_MATCH_TICKS`); `serve` needs the full set and may set
+`KFM_LADDER_ROUND_SECONDS`, `KFM_LADDER_ROUND_OPPONENTS` and `KFM_LADDER_VIEWER_URL`. A missing or
 malformed required variable exits 2 with a line naming it. The variables, their defaults and
 the roles that read them are listed in `service/README.md`.

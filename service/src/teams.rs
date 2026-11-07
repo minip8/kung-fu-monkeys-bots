@@ -49,6 +49,9 @@ pub struct Team {
     pub members: Vec<Member>,
     /// The active submission's id (`POST /teams/{t}/active`), if any.
     pub active: Option<Uuid>,
+    /// Its standing in the current season, `null` before its first game
+    /// there or outside a season (v1.2).
+    pub rating: Option<crate::ladder::TeamRating>,
 }
 
 /// A team name: trimmed, 3 to 32 characters of ASCII letters, digits, space,
@@ -106,6 +109,7 @@ pub async fn create_team(db: &PgPool, owner: Uuid, name: &str) -> AppResult<Team
         created_at,
         members,
         active: None,
+        rating: None,
     })
 }
 
@@ -143,6 +147,7 @@ pub async fn get_team(db: &PgPool, id: Uuid) -> AppResult<Team> {
         created_at,
         members: members(db, id).await?,
         active: crate::submissions::active_of(db, id).await?,
+        rating: crate::ladder::team_rating(db, id).await?,
     })
 }
 

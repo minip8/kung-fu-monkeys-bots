@@ -45,7 +45,7 @@ built as C.
 | `tools/build.sh` | The build recipe: `tools/build.sh <bot dir> <out.wasm>`. |
 | `tools/fetch_kfm_arena.sh` | Fetches the engine's released headless `kfm_arena` for the pinned engine into `.kfm/`. |
 | `docs/build.md` | The recipe in full, the build sandbox, the engine pin and CI. |
-| `service/` | The ladder service, `kfm-ladder` (Rust): accounts, tokens, teams and, to come, submissions, matches and ratings. `service/README.md` says how to run and test it. |
+| `service/` | The ladder service, `kfm-ladder` (Rust): accounts, tokens, teams, submissions built in the sandbox, seasons, scheduled matches, Glicko-2 ratings, replays and the ladder. `service/README.md` says how to run and test it. |
 | `docs/ladder-api.md` | The ladder's HTTP API, normative: every route, its auth, its JSON and its errors. |
 
 ## Quick start
@@ -60,8 +60,12 @@ cp -r examples/starter mybot                      # a bot is a directory of sour
 tools/build.sh mybot out/mybot.wasm               # compile and check the module
 tools/fetch_kfm_arena.sh                          # the engine's runner into .kfm/
 .kfm/kfm_arena --bot out/mybot.wasm --bot ref:hard --matches 10                           # one on one
-.kfm/kfm_arena --mode contest --team out/mybot.wasm --team ref:hard --matches 10 --rotate   # the ladder's mode
+m=out/mybot.wasm; .kfm/kfm_arena --mode contest --team $m,$m,$m,$m,$m --team ref:hard --matches 10 --rotate   # 5v5, as ranked
 ```
+
+`--team` takes one spec per slot, and a shorter list repeats its last spec up to the longer
+team's size: `--team out/mybot.wasm --team ref:hard` is one on one, and the five-slot list above
+is the ladder's 5v5 (`ref:hard` fills the other five).
 
 The last line of `kfm_arena`'s output sums the matches up: wins, kills and deaths per bot,
 and for a module its substitutions, `traps`, `over` (ticks over budget) and `fuel_max` (the
@@ -110,7 +114,9 @@ module that builds is one the host loads.
 
 ## The ladder
 
-Coming: accounts (GitHub sign-in) and teams, source submissions built by the service in the
-pinned build image, matches in the `contest` mode with ratings, replays, and a `kfm` command
-line tool to log in, build, test, submit and fetch replays. Until it exists, `kfm_arena` and
-the reference bots (`ref:easy`, `ref:medium`, `ref:hard`) are the way to measure a bot.
+The service (`service/`, `docs/ladder-api.md`) has accounts (GitHub or Google sign-in) and
+teams, source submissions built in the pinned build image and validated, seasons, Swiss-style
+rounds of 5v5 `contest` games played from both sides, Glicko-2 ratings, replays and a public
+board; it is not deployed yet. Coming: a `kfm` command line tool to log in, build, test, submit
+and fetch replays, and the replay viewer in the browser client. Until then, `kfm_arena` and the
+reference bots (`ref:easy`, `ref:medium`, `ref:hard`) are the way to measure a bot.

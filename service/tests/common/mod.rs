@@ -505,6 +505,9 @@ pub fn config(public_url: &str, fake: &Fake) -> Config {
         }),
         engine_tag: "v0.5.1".to_owned(),
         arena: None,
+        round_seconds: 300,
+        round_opponents: 3,
+        viewer_url: "https://kfm.minip8.com".to_owned(),
         sentry_dsn: None,
     }
 }
@@ -828,4 +831,82 @@ pub async fn age_submissions(db: &PgPool, team: &str) {
     .execute(db)
     .await
     .unwrap();
+}
+
+/// A team made straight in the database, without a sign-in: a user named
+/// after it, the team, and the user as its owner. The team's id.
+pub async fn db_team(db: &PgPool, name: &str) -> uuid::Uuid {
+    let user = uuid::Uuid::now_v7();
+    let team = uuid::Uuid::now_v7();
+    sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, $2)")
+        .bind(user)
+        .bind(format!("{name} owner"))
+        .execute(db)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO teams (id, name, created_by) VALUES ($1, $2, $3)")
+        .bind(team)
+        .bind(name)
+        .bind(user)
+        .execute(db)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO memberships (team_id, user_id, role) VALUES ($1, $2, 'owner')")
+        .bind(team)
+        .bind(user)
+        .execute(db)
+        .await
+        .unwrap();
+    team
+}
+
+/// A `ready` submission of `team` made straight in the database, its module
+/// at `modules/<id>.wasm` with the SHA-256 of `module` (stored there when a
+/// store is given), and made the team's active one. The submission's id.
+pub async fn db_ready_bot(
+    db: &PgPool,
+    store: Option<&Store>,
+    team: uuid::Uuid,
+    module: &[u8],
+) -> uuid::Uuid {
+    let id = uuid::Uuid::now_v7();
+    let key = kfm_ladder::store::module_key(id);
+    if let Some(store) = store {
+        store.put(&key, module, "application/wasm").await.unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO submissions (id, team_id, manifest, module_key, module_hash, state) \
+         VALUES ($1, $2, 'language = \"cpp\"', $3, $4, 'ready')",
+    )
+    .bind(id)
+    .bind(team)
+    .bind(&key)
+    .bind(&kfm_ladder::crypto::sha256(module)[..])
+    .execute(db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO active_bots (team_id, submission_id) VALUES ($1, $2) \
+         ON CONFLICT (team_id) DO UPDATE SET submission_id = EXCLUDED.submission_id",
+    )
+    .bind(team)
+    .bind(id)
+    .execute(db)
+    .await
+    .unwrap();
+    id
+}
+
+/// A season holding now: from a day ago for `days` days.
+pub async fn db_season(db: &PgPool, name: &str, days: i64) -> kfm_ladder::seasons::Season {
+    let now = time::OffsetDateTime::now_utc();
+    kfm_ladder::seasons::create(
+        db,
+        name,
+        now - time::Duration::days(1),
+        now + time::Duration::days(days),
+        "contest",
+    )
+    .await
+    .unwrap()
 }

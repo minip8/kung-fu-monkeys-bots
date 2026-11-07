@@ -8,9 +8,10 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use kfm_ladder::builder::{BuildSettings, BuildWorker};
 use kfm_ladder::config::{database_url_from, Config, WorkerConfig};
+use kfm_ladder::match_worker::{MatchSettings, MatchWorker};
 use kfm_ladder::store::Store;
 use kfm_ladder::worker;
-use kfm_ladder::{db, AppState};
+use kfm_ladder::{db, scheduler, seasons, AppState};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -40,6 +41,34 @@ enum Command {
         #[command(subcommand)]
         role: WorkerRole,
     },
+    /// Make or list seasons (an operator action on the VM; needs
+    /// DATABASE_URL only, and applies pending migrations first).
+    Season {
+        #[command(subcommand)]
+        action: SeasonAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SeasonAction {
+    /// Create a season: the window [start, end) in which its matches are
+    /// scheduled. Windows never overlap, so at most one season is current.
+    Create {
+        /// The season's name (`2026-12`, `Season 1`).
+        name: String,
+        /// The first instant, RFC 3339 (`2026-12-01T00:00:00Z`).
+        #[arg(long)]
+        start: String,
+        /// The end, RFC 3339, exclusive: the ranking freezes here.
+        #[arg(long)]
+        end: String,
+        /// The content mode its matches play.
+        #[arg(long, default_value = kfm_ladder::seasons::DEFAULT_MODE)]
+        mode: String,
+    },
+    /// List every season, the latest start first: name, start, end, mode,
+    /// id, and `current` on the one whose window holds now.
+    List,
 }
 
 #[derive(Subcommand, Debug, Clone, Copy)]
@@ -47,8 +76,8 @@ enum WorkerRole {
     /// Claim build and validate jobs: a submission's source into a module in
     /// the sandbox, then the module's checks and its smoke match.
     Build,
-    /// Claim match jobs: one kfm_arena run, its result and replay (step 4;
-    /// until then each match job fails as not implemented).
+    /// Claim match jobs: one kfm_arena run of a pair from both sides, its
+    /// two games recorded with their replays and the ratings updated.
     Match,
 }
 
@@ -66,20 +95,61 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-            let build = match role {
-                WorkerRole::Build => match BuildSettings::from_config(&config) {
-                    Ok(settings) => Some(settings),
-                    Err(err) => {
-                        eprintln!("kfm-ladder: {err}");
-                        return ExitCode::from(2);
-                    }
-                },
-                WorkerRole::Match => None,
+            let settings = match role {
+                WorkerRole::Build => BuildSettings::from_config(&config).map(Role::Build),
+                WorkerRole::Match => MatchSettings::from_config(&config).map(Role::Match),
+            };
+            let settings = match settings {
+                Ok(settings) => settings,
+                Err(err) => {
+                    eprintln!("kfm-ladder: {err}");
+                    return ExitCode::from(2);
+                }
             };
             #[cfg(feature = "sentry")]
             let _sentry = init_sentry(config.sentry_dsn.clone());
             init_logging();
-            run(worker(config, build))
+            run(worker(config, settings))
+        }
+        Command::Season { action } => {
+            let url = match database_url_from(|k| std::env::var(k).ok()) {
+                Ok(url) => url,
+                Err(err) => {
+                    eprintln!("kfm-ladder: {err}");
+                    return ExitCode::from(2);
+                }
+            };
+            let times = match &action {
+                SeasonAction::Create { start, end, .. } => {
+                    match (seasons::parse_time(start), seasons::parse_time(end)) {
+                        (Ok(s), Ok(e)) => Some((s, e)),
+                        (Err(err), _) | (_, Err(err)) => {
+                            eprintln!("kfm-ladder: {err}");
+                            return ExitCode::from(2);
+                        }
+                    }
+                }
+                SeasonAction::List => None,
+            };
+            init_logging();
+            run(async move {
+                let pool = db::connect(&url, DB_PATIENCE).await?;
+                db::migrate(&pool).await?;
+                match (action, times) {
+                    (SeasonAction::Create { name, mode, .. }, Some((start, end))) => {
+                        let season = seasons::create(&pool, &name, start, end, &mode).await?;
+                        let now = seasons::db_now(&pool).await?;
+                        println!("{}", seasons::format_line(&season, now));
+                    }
+                    _ => {
+                        let now = seasons::db_now(&pool).await?;
+                        for season in seasons::list(&pool).await? {
+                            println!("{}", seasons::format_line(&season, now));
+                        }
+                    }
+                }
+                Ok(())
+            })
         }
         Command::Migrate => {
             let url = match database_url_from(|k| std::env::var(k).ok()) {
@@ -173,26 +243,54 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     db::migrate(&pool).await?;
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     tracing::info!(listen = %listener.local_addr()?, public_url = %config.public_url, "kfm-ladder listening");
+    // One signal stops both the HTTP server and the scheduler.
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = stop.send(true);
+    });
+    let settings = scheduler::SchedulerSettings::new(
+        Duration::from_secs(config.round_seconds),
+        config.round_opponents,
+    );
+    let scheduler = tokio::spawn(scheduler::run(pool.clone(), settings, stopped.clone()));
     let state = AppState::new(pool, config);
-    kfm_ladder::serve(state, listener, shutdown_signal()).await?;
+    let mut http_stop = stopped;
+    let result = kfm_ladder::serve(state, listener, async move {
+        while !*http_stop.borrow() {
+            if http_stop.changed().await.is_err() {
+                break;
+            }
+        }
+    })
+    .await;
+    let _ = scheduler.await;
+    result?;
     Ok(())
 }
 
-async fn worker(config: WorkerConfig, build: Option<BuildSettings>) -> Result<(), BoxError> {
+/// A worker role with its settings.
+enum Role {
+    Build(BuildSettings),
+    Match(MatchSettings),
+}
+
+async fn worker(config: WorkerConfig, role: Role) -> Result<(), BoxError> {
     tracing::info!(?config, "configuration");
     let pool = db::connect(&config.database_url, DB_PATIENCE).await?;
     let shutdown = worker::shutdown_on_signal();
     let timing = worker::Timing::default();
-    match build {
-        Some(settings) => {
-            let store = Store::new(&config.s3)?;
+    let store = Store::new(&config.s3)?;
+    match role {
+        Role::Build(settings) => {
             let handler = BuildWorker::new(pool.clone(), store, settings);
             let name = worker::worker_name("build");
             worker::run(pool, handler, name, timing, shutdown).await;
         }
-        None => {
+        Role::Match(settings) => {
+            let handler = MatchWorker::new(pool.clone(), store, settings);
             let name = worker::worker_name("match");
-            worker::run(pool, worker::MatchStub, name, timing, shutdown).await;
+            worker::run(pool, handler, name, timing, shutdown).await;
         }
     }
     Ok(())

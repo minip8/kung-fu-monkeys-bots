@@ -52,6 +52,8 @@ pub struct SubmissionRow {
     pub error: Option<String>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+    pub ranked_games: i32,
+    pub ranked_faults: i32,
     pub active: bool,
 }
 
@@ -72,13 +74,17 @@ pub struct Submission {
     pub log_url: Option<String>,
     pub error: Option<String>,
     pub active: bool,
+    /// Ranked games it played (v1.2).
+    pub ranked_games: i32,
+    /// Of those, the games in which one of its slots faulted (v1.2).
+    pub ranked_faults: i32,
 }
 
 /// The columns of [`SubmissionRow`], `s` the submission and `a` its team's
 /// `active_bots` row joined on the submission.
 pub const SELECT_ROW: &str = "SELECT s.id, s.team_id, s.submitted_by, s.manifest, s.source_key, \
      s.module_key, s.module_hash, s.log_key, s.state, s.error, s.created_at, s.updated_at, \
-     (a.submission_id IS NOT NULL) AS active \
+     s.ranked_games, s.ranked_faults, (a.submission_id IS NOT NULL) AS active \
      FROM submissions s LEFT JOIN active_bots a ON a.team_id = s.team_id AND a.submission_id = s.id";
 
 pub async fn get_row(db: &PgPool, id: Uuid) -> AppResult<Option<SubmissionRow>> {
@@ -119,6 +125,8 @@ pub async fn view(state: &AppState, row: SubmissionRow) -> AppResult<Submission>
         log_url,
         error: row.error,
         active: row.active,
+        ranked_games: row.ranked_games,
+        ranked_faults: row.ranked_faults,
     })
 }
 

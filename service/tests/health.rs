@@ -6,7 +6,7 @@ use common::{error_code, start};
 use reqwest::StatusCode;
 use sqlx::PgPool;
 
-const TABLES: [&str; 12] = [
+const TABLES: [&str; 13] = [
     "users",
     "identities",
     "sessions",
@@ -19,6 +19,7 @@ const TABLES: [&str; 12] = [
     "matches",
     "ratings",
     "seasons",
+    "rounds",
 ];
 
 #[sqlx::test(migrations = false)]

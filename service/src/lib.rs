@@ -1,8 +1,9 @@
 //! The Kung Fu Monkeys ladder service (architecture v0.63 §11, "M7 step 3
 //! design"; §8 "The ladder"). Step 3a: accounts through GitHub and Google
 //! OAuth, portal sessions, API tokens and teams, over Postgres. Step 3b:
-//! submissions, the object store, the jobs table and the build worker. The
-//! HTTP surface is normative in `docs/ladder-api.md`.
+//! submissions, the object store, the jobs table and the build worker. Step
+//! 4: seasons, the scheduler, the match worker, Glicko-2 ratings and the
+//! ladder. The HTTP surface is normative in `docs/ladder-api.md`.
 //!
 //! The binary is a thin CLI over [`serve`]; tests build an [`AppState`] with a
 //! [`Config`] of their own, bind a listener on port 0 and pass both in.
@@ -16,11 +17,16 @@ pub mod crypto;
 pub mod db;
 pub mod error;
 pub mod extract;
+pub mod glicko;
 pub mod jobs;
+pub mod ladder;
 pub mod manifest;
+pub mod match_worker;
 pub mod oauth;
 pub mod portal;
 pub mod retention;
+pub mod scheduler;
+pub mod seasons;
 pub mod store;
 pub mod submissions;
 pub mod teams;
@@ -80,6 +86,10 @@ impl AppState {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/seasons", get(seasons::list_route))
+        .route("/ladder", get(ladder::ladder_route))
+        .route("/matches", get(ladder::matches_route))
+        .route("/matches/{id}", get(ladder::match_route))
         .route("/me", get(users::me))
         .route("/tokens", get(tokens::list).post(tokens::create))
         .route("/tokens/{id}", delete(tokens::revoke))
