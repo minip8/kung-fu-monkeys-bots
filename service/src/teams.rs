@@ -47,6 +47,8 @@ pub struct Team {
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     pub members: Vec<Member>,
+    /// The active submission's id (`POST /teams/{t}/active`), if any.
+    pub active: Option<Uuid>,
 }
 
 /// A team name: trimmed, 3 to 32 characters of ASCII letters, digits, space,
@@ -103,6 +105,7 @@ pub async fn create_team(db: &PgPool, owner: Uuid, name: &str) -> AppResult<Team
         name,
         created_at,
         members,
+        active: None,
     })
 }
 
@@ -139,6 +142,7 @@ pub async fn get_team(db: &PgPool, id: Uuid) -> AppResult<Team> {
         name,
         created_at,
         members: members(db, id).await?,
+        active: crate::submissions::active_of(db, id).await?,
     })
 }
 

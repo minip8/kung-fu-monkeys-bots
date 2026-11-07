@@ -44,4 +44,6 @@ toml = { version = "1.2.1", default-features = false, features = ["parse", "serd
 rust-s3 = { version = "0.38.0", default-features = false, features = ["tokio-rustls-tls"] }
 
 [dev-dependencies]
+# Uploads in the tests (the service itself sends no multipart).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

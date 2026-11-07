@@ -68,6 +68,11 @@ error_codes! {
     OAuthDenied = ("oauth_denied", FORBIDDEN, "The provider did not grant the sign-in."),
     OAuthFailed = ("oauth_failed", BAD_GATEWAY, "The provider's reply could not be verified; try again."),
     Internal = ("internal", INTERNAL_SERVER_ERROR, "Something went wrong on our side."),
+    BadManifest = ("bad_manifest", BAD_REQUEST, "The manifest is refused."),
+    BadSource = ("bad_source", BAD_REQUEST, "The source archive is refused."),
+    TooLarge = ("too_large", PAYLOAD_TOO_LARGE, "The upload is over its size cap (4 MiB of source)."),
+    RateLimited = ("rate_limited", TOO_MANY_REQUESTS, "A team submits at most once a minute; try again shortly."),
+    NotReady = ("not_ready", CONFLICT, "Only a ready submission can be made active."),
 }
 
 /// An API error: `{"error":"<code>","message":"<message>"}` with the code's status.
@@ -108,6 +113,68 @@ impl IntoResponse for AppError {
     }
 }
 
+/// An error whose message names exactly what was refused (`bad_manifest`,
+/// `bad_source`: the first violation found): the code's message with the
+/// detail appended. Still the two keys of every error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiError {
+    pub code: ErrorCode,
+    pub detail: Option<String>,
+}
+
+pub type ApiResult<T> = Result<T, ApiError>;
+
+impl ApiError {
+    pub fn with_detail(code: ErrorCode, detail: impl Into<String>) -> ApiError {
+        ApiError {
+            code,
+            detail: Some(detail.into()),
+        }
+    }
+
+    /// The message sent: the code's, with the detail after a colon.
+    pub fn message(&self) -> String {
+        match &self.detail {
+            Some(detail) => {
+                format!(
+                    "{}: {}",
+                    self.code.message().trim_end_matches('.'),
+                    detail.trim_end_matches('.')
+                ) + "."
+            }
+            None => self.code.message().to_owned(),
+        }
+    }
+}
+
+impl From<AppError> for ApiError {
+    fn from(err: AppError) -> Self {
+        ApiError {
+            code: err.0,
+            detail: None,
+        }
+    }
+}
+
+impl From<ErrorCode> for ApiError {
+    fn from(code: ErrorCode) -> Self {
+        ApiError { code, detail: None }
+    }
+}
+
+impl From<sqlx::Error> for ApiError {
+    fn from(err: sqlx::Error) -> Self {
+        AppError::from(err).into()
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let body = serde_json::json!({ "error": self.code.as_str(), "message": self.message() });
+        (self.code.status(), Json(body)).into_response()
+    }
+}
+
 /// Whether `err` is a unique violation of the constraint or index `name`.
 pub fn is_unique_violation(err: &sqlx::Error, name: &str) -> bool {
     match err {
@@ -131,5 +198,18 @@ mod tests {
             assert!(code.status().is_client_error() || code.status().is_server_error());
         }
         assert_eq!(ErrorCode::parse("nope"), None);
+    }
+
+    #[test]
+    fn a_detail_follows_the_message() {
+        let err = ApiError::with_detail(ErrorCode::BadSource, "\"../x.c\" contains a .. component");
+        assert_eq!(
+            err.message(),
+            "The source archive is refused: \"../x.c\" contains a .. component."
+        );
+        assert_eq!(
+            ApiError::from(ErrorCode::NotReady).message(),
+            ErrorCode::NotReady.message()
+        );
     }
 }

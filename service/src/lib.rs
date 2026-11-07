@@ -6,15 +6,19 @@
 //! The binary is a thin CLI over [`serve`]; tests build an [`AppState`] with a
 //! [`Config`] of their own, bind a listener on port 0 and pass both in.
 
+pub mod archive;
 pub mod auth;
 pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod error;
 pub mod extract;
+pub mod jobs;
+pub mod manifest;
 pub mod oauth;
 pub mod portal;
 pub mod store;
+pub mod submissions;
 pub mod teams;
 pub mod tokens;
 pub mod users;
@@ -75,6 +79,15 @@ pub fn routes() -> Router<AppState> {
         .route("/tokens/{id}", delete(tokens::revoke))
         .route("/teams", get(teams::list_mine).post(teams::create))
         .route("/teams/{id}", get(teams::show))
+        .route(
+            "/teams/{id}/submissions",
+            get(submissions::list).post(submissions::create).layer(
+                axum::extract::DefaultBodyLimit::max(submissions::MAX_UPLOAD_BYTES),
+            ),
+        )
+        .route("/teams/{id}/active", post(submissions::activate_route))
+        .route("/submissions/{id}", get(submissions::show))
+        .route("/submissions/{id}/log", get(submissions::log))
         .route("/teams/{id}/members", post(teams::add_member_route))
         .route(
             "/teams/{id}/members/{user}",
