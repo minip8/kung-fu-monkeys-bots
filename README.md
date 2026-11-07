@@ -1,8 +1,8 @@
 # Kung Fu Monkeys bots
 
 Bots for [Kung Fu Monkeys](https://github.com/minip8/kung-fu-monkeys), an arena brawler in which
-monkeys throw bananas that fly like boomerangs. This repository holds the bot SDK, example bots
-and the build recipe the ladder uses; the ladder itself comes later. The game repository is the
+monkeys throw bananas that fly like boomerangs. This repository holds the bot SDK, example bots,
+the build recipe, the ladder service and `kfm`, the ladder's command line tool. The game repository is the
 engine: it hosts bots, runs matches (`kfm_arena`) and owns the normative bot ABI.
 
 ## What a bot is
@@ -47,14 +47,35 @@ built as C.
 | `docs/build.md` | The recipe in full, the build sandbox, the engine pin and CI. |
 | `service/` | The ladder service, `kfm-ladder` (Rust): accounts, tokens, teams, submissions built in the sandbox, seasons, scheduled matches, Glicko-2 ratings, replays and the ladder. `service/README.md` says how to run and test it. |
 | `docs/ladder-api.md` | The ladder's HTTP API, normative: every route, its auth, its JSON and its errors. |
+| `cli/` | `kfm`, the command line tool (Rust; PyPI `kfm-cli`): log in, build, test, submit, matches, replays. `cli/README.md` documents every command. |
 
 ## Quick start
 
-You need a clang that targets wasm32 with `wasm-ld`. The ladder's is emsdk's
-(`emsdk install 6.0.13 && emsdk activate 6.0.13`; `docs/build.md` says why that version).
+With the `kfm` command line tool ([`cli/README.md`](cli/README.md)): it builds in the
+ladder's own image (Docker) or with a local clang, plays with the engine's released runner and
+talks to the ladder at <https://bots.kfm.minip8.com/>, where you sign in with GitHub or Google
+and create a team first.
 
 ```sh
-git clone https://github.com/minip8/kung-fu-monkeys-bots.git
+uv tool install kfm-cli                 # the PyPI name; the command is kfm (pipx install kfm-cli works too)
+git clone --depth 1 https://github.com/minip8/kung-fu-monkeys-bots.git
+cp -r kung-fu-monkeys-bots/examples/starter mybot && cd mybot   # a bot is a directory of sources
+kfm login                               # the browser confirms; a submit token is stored
+kfm build                               # out/bot.wasm with the ladder's recipe, checked like the host does
+kfm test                                # 10 ranked-shape 5v5 matches against ref:hard: wins, faults, fuel
+kfm submit --wait --activate            # built and validated by the ladder, then your ranked bot
+```
+
+Iterate: change the bot, `kfm build && kfm test` (another `--seed` now and then), submit again.
+`kfm matches list`, `kfm ladder` and `kfm replay open <match>` follow it on the ladder.
+
+### Without the CLI
+
+The scripts under `tools/` do the same from a checkout (contributors, CI). You need a clang
+that targets wasm32 with `wasm-ld`; the ladder's is emsdk's (`emsdk install 6.0.13 && emsdk
+activate 6.0.13`; `docs/build.md` says why that version).
+
+```sh
 cd kung-fu-monkeys-bots
 cp -r examples/starter mybot                      # a bot is a directory of sources
 tools/build.sh mybot out/mybot.wasm               # compile and check the module
@@ -71,9 +92,8 @@ The last line of `kfm_arena`'s output sums the matches up: wins, kills and death
 and for a module its substitutions, `traps`, `over` (ticks over budget) and `fuel_max` (the
 most instructions one `kfm_act` used). `--json` prints one JSON object per match (the engine's
 `docs/arena-result.md`), `--replay out/m.kfmr` writes a replay the game plays back, and `--log`
-shows what the bot passed to `kfm_log`. Iterate: change the bot, rebuild, play again, with
-another `--seed` now and then. While no engine release carries `kfm_arena` yet,
-`tools/build_kfm_arena.sh` builds it from the pinned engine commit instead (`docs/build.md`).
+shows what the bot passed to `kfm_log`. `tools/build_kfm_arena.sh` builds the runner from the
+pinned engine commit instead (`docs/build.md`).
 
 ## The contest mode
 
@@ -117,6 +137,7 @@ module that builds is one the host loads.
 The service (`service/`, `docs/ladder-api.md`) has accounts (GitHub or Google sign-in) and
 teams, source submissions built in the pinned build image and validated, seasons, Swiss-style
 rounds of 5v5 `contest` games played from both sides, Glicko-2 ratings, replays and a public
-board; it is not deployed yet. Coming: a `kfm` command line tool to log in, build, test, submit
-and fetch replays, and the replay viewer in the browser client. Until then, `kfm_arena` and the
-reference bots (`ref:easy`, `ref:medium`, `ref:hard`) are the way to measure a bot.
+board. `kfm` (`cli/`) is its command line tool: log in, build, test, submit, follow matches and
+fetch replays. Coming: the replay viewer in the browser client. `kfm test` (or `kfm_arena`
+itself) against the reference bots (`ref:easy`, `ref:medium`, `ref:hard`) is the way to
+measure a bot before it is ranked.
