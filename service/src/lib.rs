@@ -6,11 +6,15 @@
 //! The binary is a thin CLI over [`serve`]; tests build an [`AppState`] with a
 //! [`Config`] of their own, bind a listener on port 0 and pass both in.
 
+pub mod auth;
 pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod error;
 pub mod extract;
+pub mod oauth;
+pub mod tokens;
+pub mod users;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -27,18 +31,30 @@ use tokio::net::TcpListener;
 pub use crate::config::Config;
 use crate::error::{AppError, ErrorCode};
 
-/// What every handler shares: the pool and the configuration.
+/// What every handler shares: the pool, the configuration and the outbound
+/// HTTP client (OAuth providers).
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
     pub config: Arc<Config>,
+    pub(crate) http: reqwest::Client,
+    pub(crate) google: Arc<oauth::GoogleCache>,
 }
 
 impl AppState {
     pub fn new(db: PgPool, config: Config) -> AppState {
+        let http = reqwest::Client::builder()
+            // Following a redirect from a provider opens the door to SSRF.
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(15))
+            .user_agent(concat!("kfm-ladder/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .expect("the HTTP client builds with static settings");
         AppState {
             db,
             config: Arc::new(config),
+            http,
+            google: Arc::new(oauth::GoogleCache::default()),
         }
     }
 }
@@ -47,6 +63,8 @@ impl AppState {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/me", get(users::me))
+        .merge(oauth::routes())
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
 }
