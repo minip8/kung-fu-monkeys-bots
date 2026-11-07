@@ -1,0 +1,91 @@
+name: CI
+
+# docs/build.md. header: sdk/c/kfm_bot.h is the engine's at engine.lock's commit. image: the
+# build image builds, every examples/*/ builds in the sandbox, and the same examples built
+# without docker (tools/build.sh with the same emsdk) are byte-identical to the sandbox's.
+# play: every sandbox-built module plays against the reference bot without a fault. A
+# repository without examples/*/ passes with a notice.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  header:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: tools/check_header.sh
+
+  image:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the image
+        run: docker build -t kfm-bot-build .
+      - name: Build every example in the sandbox
+        run: |
+          mkdir -p out/sandbox
+          shopt -s nullglob
+          dirs=(examples/*/)
+          [[ ${#dirs[@]} -gt 0 ]] || echo "::notice::no examples/*/ directories: nothing to build"
+          for d in "${dirs[@]}"; do
+            tools/build_in_sandbox.sh "$d" "out/sandbox/$(basename "$d")"
+          done
+          # Always something to upload, so the play job's download never fails.
+          find out/sandbox -name bot.wasm | sort > out/sandbox/MODULES.txt
+      - uses: mymindstorm/setup-emsdk@v16
+        with:
+          version: 6.0.13 # the emsdk of the Dockerfile's base image
+      - name: Build every example without docker; compare with the sandbox
+        run: |
+          sudo apt-get update && sudo apt-get install -y wabt
+          export CLANG="$(dirname "$(command -v emcc)")/../bin/clang"
+          shopt -s nullglob
+          for d in examples/*/; do
+            name="$(basename "$d")"
+            tools/build.sh "$d" "out/local/$name.wasm"
+            cmp "out/local/$name.wasm" "out/sandbox/$name/bot.wasm" ||
+              { echo "::error::$name: the local build differs from the sandbox build"; exit 1; }
+          done
+          (cd out/sandbox && find . -name bot.wasm -exec sha256sum {} +) | sort -k 2
+      - uses: actions/upload-artifact@v7
+        with:
+          name: modules
+          path: out/sandbox/
+
+  play:
+    needs: image
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: modules
+          path: out/sandbox
+      - name: Any modules?
+        id: modules
+        run: |
+          if [[ -s out/sandbox/MODULES.txt ]]; then echo "any=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::no example modules: nothing to play"; fi
+      # A release (engine.lock tag=) is downloaded; without one, the pinned commit is built.
+      - uses: actions/cache@v6
+        if: steps.modules.outputs.any
+        with:
+          path: .kfm/kfm_arena
+          key: kfm_arena-${{ runner.os }}-${{ hashFiles('engine.lock', 'tools/build_kfm_arena.sh') }}
+      - name: Get kfm_arena
+        if: steps.modules.outputs.any
+        run: |
+          if grep -q '^tag=.' engine.lock; then tools/fetch_kfm_arena.sh
+          elif [[ ! -x .kfm/kfm_arena ]]; then
+            sudo apt-get update && sudo apt-get install -y cmake ninja-build
+            tools/build_kfm_arena.sh
+          fi
+          .kfm/kfm_arena --help | head -n 1
+      - name: Play every module against the reference bot
+        if: steps.modules.outputs.any
+        run: tools/play.sh .kfm/kfm_arena $(cat out/sandbox/MODULES.txt)
