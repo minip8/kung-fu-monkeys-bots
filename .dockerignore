@@ -1,0 +1,4 @@
+# The image takes sdk/ and tools/build.sh only (Dockerfile); keep the context small.
+*
+!sdk/
+!tools/build.sh
