@@ -3,7 +3,8 @@
 //! OAuth, portal sessions, API tokens and teams, over Postgres. Step 3b:
 //! submissions, the object store, the jobs table and the build worker. Step
 //! 4: seasons, the scheduler, the match worker, Glicko-2 ratings and the
-//! ladder. The HTTP surface is normative in `docs/ladder-api.md`.
+//! ladder. Step 5: the `kfm` CLI's login (`cli_login`). The HTTP surface is
+//! normative in `docs/ladder-api.md`.
 //!
 //! The binary is a thin CLI over [`serve`]; tests build an [`AppState`] with a
 //! [`Config`] of their own, bind a listener on port 0 and pass both in.
@@ -12,6 +13,7 @@ pub mod archive;
 pub mod arena;
 pub mod auth;
 pub mod builder;
+pub mod cli_login;
 pub mod config;
 pub mod crypto;
 pub mod db;
@@ -110,6 +112,7 @@ pub fn routes() -> Router<AppState> {
             delete(teams::remove_member_route),
         )
         .merge(oauth::routes())
+        .merge(cli_login::routes())
         .merge(portal::routes())
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)

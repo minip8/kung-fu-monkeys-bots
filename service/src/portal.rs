@@ -275,16 +275,22 @@ async fn user_view(state: &AppState, session: &Session) -> AppResult<UserView> {
 /// A portal page: HTML, never cached (it may show a token's secret), framed by
 /// nobody, and no scripts.
 fn page_response(status: StatusCode, html: String) -> Response {
+    page_response_csp(status, html, PAGE_CSP)
+}
+
+/// The portal pages' Content-Security-Policy: no script, forms to the portal only.
+const PAGE_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; \
+     frame-ancestors 'none'; base-uri 'none'";
+
+/// [`page_response`] with another Content-Security-Policy (the CLI login's
+/// page, whose form redirects to the CLI's local listener).
+pub(crate) fn page_response_csp(status: StatusCode, html: String, csp: &'static str) -> Response {
     let mut response = (status, html).into_response();
     let headers = response.headers_mut();
     for (name, value) in [
         (CONTENT_TYPE.as_str(), "text/html; charset=utf-8"),
         (CACHE_CONTROL.as_str(), "no-store"),
-        (
-            "content-security-policy",
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; \
-             frame-ancestors 'none'; base-uri 'none'",
-        ),
+        ("content-security-policy", csp),
         ("x-content-type-options", "nosniff"),
         ("referrer-policy", "same-origin"),
     ] {

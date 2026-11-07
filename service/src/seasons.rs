@@ -264,7 +264,11 @@ pub async fn list_route(State(state): State<AppState>) -> AppResult<Json<serde_j
         .iter()
         .map(|s| SeasonView::of(s, now))
         .collect();
-    Ok(Json(serde_json::json!({ "seasons": seasons })))
+    // v1.3: the release new games run under, so `kfm test` plays the same one.
+    Ok(Json(serde_json::json!({
+        "seasons": seasons,
+        "engine_tag": state.config.engine_tag,
+    })))
 }
 
 /// One line per season for `kfm-ladder season list`.

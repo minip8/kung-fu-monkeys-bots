@@ -10,7 +10,7 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::auth::Caller;
+use crate::auth::{Auth, Caller};
 use crate::crypto;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::extract::{ApiPath, JsonBody};
@@ -92,8 +92,21 @@ pub async fn create_token(
     name: &str,
     scope: Scope,
 ) -> AppResult<(TokenInfo, String)> {
-    let name = clean_name(name)?;
     let mut tx = db.begin().await?;
+    let created = create_token_in(&mut tx, user_id, name, scope).await?;
+    tx.commit().await?;
+    Ok(created)
+}
+
+/// [`create_token`] inside the caller's transaction (the CLI login inserts
+/// its code in the same one).
+pub async fn create_token_in(
+    tx: &mut sqlx::PgConnection,
+    user_id: Uuid,
+    name: &str,
+    scope: Scope,
+) -> AppResult<(TokenInfo, String)> {
+    let name = clean_name(name)?;
     // Serialise a user's token creations so the cap holds under concurrency.
     sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
         .bind(user_id)
@@ -119,7 +132,6 @@ pub async fn create_token(
     .bind(scope.as_str())
     .fetch_one(&mut *tx)
     .await?;
-    tx.commit().await?;
     Ok((info, secret))
 }
 
@@ -193,14 +205,21 @@ pub async fn list(State(state): State<AppState>, caller: Caller) -> AppResult<im
     Ok(Json(serde_json::json!({ "tokens": tokens })))
 }
 
-/// `DELETE /tokens/{id}` (session + CSRF header).
+/// `DELETE /tokens/{id}` (session + CSRF header, or the token `id` itself as
+/// the bearer: a token may revoke itself, API v1.3, so `kfm logout` needs no
+/// session; it can never touch another).
 pub async fn revoke(
     State(state): State<AppState>,
     caller: Caller,
     headers: HeaderMap,
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<StatusCode> {
-    caller.session_write(&headers)?;
+    match caller.auth {
+        Auth::Token { id: own, .. } if own == id => {}
+        _ => {
+            caller.session_write(&headers)?;
+        }
+    }
     revoke_token(&state.db, caller.user_id, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

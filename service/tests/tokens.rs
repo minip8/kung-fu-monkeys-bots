@@ -147,7 +147,7 @@ async fn unknown_and_malformed_bearers_are_invalid_even_with_a_session(pool: PgP
 }
 
 #[sqlx::test]
-async fn token_management_needs_the_portal_session(pool: PgPool) {
+async fn token_management_needs_the_portal_session_but_a_token_may_revoke_itself(pool: PgPool) {
     let app = start(pool).await;
     let mut browser = github_browser(&app, 2005, "manager").await;
     let csrf = browser.csrf().await;
@@ -167,11 +167,37 @@ async fn token_management_needs_the_portal_session(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(error_code(make).await, "session_required");
-    let revoke = bearer(&app, Method::DELETE, &format!("/tokens/{id}"), secret)
+
+    // A token revokes only itself (v1.3, `kfm logout`): another one needs the session.
+    let other = create(&mut browser, &csrf, "other", "read").await;
+    let other_id = other["id"].as_str().unwrap();
+    let revoke = bearer(&app, Method::DELETE, &format!("/tokens/{other_id}"), secret)
         .send()
         .await
         .unwrap();
     assert_eq!(error_code(revoke).await, "session_required");
+    let by_other = bearer(
+        &app,
+        Method::DELETE,
+        &format!("/tokens/{id}"),
+        other["secret"].as_str().unwrap(),
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(error_code(by_other).await, "session_required");
+    let itself = bearer(&app, Method::DELETE, &format!("/tokens/{id}"), secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(itself.status(), StatusCode::NO_CONTENT);
+    let after = bearer(&app, Method::GET, "/me", secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(error_code(after).await, "invalid_token");
+    let listed: serde_json::Value = browser.get("/tokens").await.json().await.unwrap();
+    assert_eq!(listed["tokens"].as_array().unwrap().len(), 1);
 }
 
 #[sqlx::test]
