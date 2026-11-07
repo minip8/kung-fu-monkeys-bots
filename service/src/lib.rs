@@ -14,6 +14,7 @@ pub mod error;
 pub mod extract;
 pub mod oauth;
 pub mod portal;
+pub mod store;
 pub mod teams;
 pub mod tokens;
 pub mod users;
@@ -32,13 +33,15 @@ use tokio::net::TcpListener;
 
 pub use crate::config::Config;
 use crate::error::{AppError, ErrorCode};
+pub use crate::store::Store;
 
-/// What every handler shares: the pool, the configuration and the outbound
-/// HTTP client (OAuth providers).
+/// What every handler shares: the pool, the configuration, the object store
+/// and the outbound HTTP client (OAuth providers).
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
     pub config: Arc<Config>,
+    pub store: Arc<Store>,
     pub(crate) http: reqwest::Client,
     pub(crate) google: Arc<oauth::GoogleCache>,
 }
@@ -52,8 +55,10 @@ impl AppState {
             .user_agent(concat!("kfm-ladder/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("the HTTP client builds with static settings");
+        let store = Store::new(&config.s3).expect("the object store client builds offline");
         AppState {
             db,
+            store: Arc::new(store),
             config: Arc::new(config),
             http,
             google: Arc::new(oauth::GoogleCache::default()),

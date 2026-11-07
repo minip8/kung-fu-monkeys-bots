@@ -18,7 +18,7 @@ use axum::{Form, Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use kfm_ladder::config::{Config, OAuthApp, S3Config};
-use kfm_ladder::AppState;
+use kfm_ladder::{AppState, Store};
 use openidconnect::core::{
     CoreIdToken, CoreIdTokenClaims, CoreJsonWebKeySet, CoreJwsSigningAlgorithm,
     CoreRsaPrivateSigningKey,
@@ -431,6 +431,43 @@ pub async fn start_fake() -> Fake {
     fake
 }
 
+/// The test object store: `KFM_LADDER_TEST_S3_ENDPOINT` (a MinIO, e.g.
+/// `http://127.0.0.1:9000`), with `KFM_LADDER_TEST_S3_ACCESS_KEY`,
+/// `_SECRET_KEY` and `_BUCKET` defaulting to the compose stack's `kfm-dev`,
+/// `kfm-dev-secret` and `kfm-ladder-test`. `None` when the endpoint is unset.
+pub fn test_s3() -> Option<S3Config> {
+    let var = |name: &str, default: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| default.to_owned())
+    };
+    let endpoint = std::env::var("KFM_LADDER_TEST_S3_ENDPOINT")
+        .ok()
+        .filter(|v| !v.is_empty())?;
+    Some(S3Config {
+        endpoint: endpoint
+            .parse()
+            .expect("KFM_LADDER_TEST_S3_ENDPOINT is a URL"),
+        bucket: var("KFM_LADDER_TEST_S3_BUCKET", "kfm-ladder-test"),
+        access_key: var("KFM_LADDER_TEST_S3_ACCESS_KEY", "kfm-dev"),
+        secret_key: var("KFM_LADDER_TEST_S3_SECRET_KEY", "kfm-dev-secret"),
+        region: var("KFM_LADDER_TEST_S3_REGION", "us-east-1"),
+    })
+}
+
+/// The test store with its bucket made, or `None` (and a line saying why the
+/// test is skipped) when `KFM_LADDER_TEST_S3_ENDPOINT` is unset.
+pub async fn test_store(test: &str) -> Option<Store> {
+    let Some(config) = test_s3() else {
+        eprintln!("{test}: skipped: KFM_LADDER_TEST_S3_ENDPOINT is unset (a MinIO; service/README.md \"Test\")");
+        return None;
+    };
+    let store = Store::new(&config).unwrap();
+    store.ensure_bucket().await.unwrap();
+    Some(store)
+}
+
 pub struct TestApp {
     pub base: String,
     pub db: PgPool,
@@ -455,13 +492,13 @@ pub fn config(public_url: &str, fake: &Fake) -> Config {
         github_token_url: format!("{}/github/token", fake.base).parse().unwrap(),
         github_api_url: format!("{}/github/api", fake.base),
         google_issuer: fake.google_issuer(),
-        s3: S3Config {
-            endpoint: "http://127.0.0.1:9000".parse().unwrap(),
+        s3: test_s3().unwrap_or_else(|| S3Config {
+            endpoint: "http://127.0.0.1:9".parse().unwrap(),
             bucket: "kfm".to_owned(),
             access_key: "minio".to_owned(),
             secret_key: "minio-secret".to_owned(),
             region: "auto".to_owned(),
-        },
+        }),
         engine_tag: "v0.5.1".to_owned(),
         arena: None,
         sentry_dsn: None,
