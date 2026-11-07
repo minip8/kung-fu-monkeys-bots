@@ -1,0 +1,15 @@
+# The engine this repository is pinned to (docs/build.md "The engine pin"). Flat key=value lines,
+# read by tools/fetch_kfm_arena.sh, tools/build_kfm_arena.sh, tools/check_header.sh and CI.
+#
+# tag:    the engine release (a v* tag of minip8/kung-fu-monkeys with kfm_arena assets) whose
+#         runner the examples are played with. Empty: no release has assets yet (the release
+#         workflow first runs on the tag after v0.4.0), so CI builds kfm_arena from `commit`.
+# commit: the engine commit, in full, whose tools/bots/sdk-c/kfm_bot.h sdk/c/kfm_bot.h copies
+#         byte for byte (6230aa1; sdk/c/ENGINE_SOURCE.txt names the same commit).
+#
+# To bump: set commit to the new engine commit (and tag to its release once there is one),
+# copy that commit's tools/bots/sdk-c/kfm_bot.h to sdk/c/kfm_bot.h, update
+# sdk/c/ENGINE_SOURCE.txt, run tools/check_header.sh, rebuild and play the examples, and commit
+# it all together. When a tag is set, commit must be the commit that tag points at.
+tag=
+commit=6230aa114e73dcb55f75771456f25009cdeca99f

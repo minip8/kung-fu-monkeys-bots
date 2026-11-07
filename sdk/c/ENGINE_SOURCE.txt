@@ -1,0 +1,9 @@
+sdk/c/kfm_bot.h is a byte-identical copy of the engine repository's
+tools/bots/sdk-c/kfm_bot.h at engine commit 6230aa1 (the engine's main at the
+time of the copy; the header itself last changed in engine commit b5aaf22).
+
+The engine's copy stays normative: the engine's example_bot_test checks it
+against engine/ai/include/kfm/ai/observation.hpp, the sim's integer math and
+the banana flight step. Never edit this copy here; change the engine's header,
+then copy it again and update the commit above. tools/check_header.sh compares
+this file with the engine's copy at the pinned engine commit.

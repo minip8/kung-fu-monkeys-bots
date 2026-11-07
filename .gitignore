@@ -1,0 +1,6 @@
+# The engine clone, its build and the downloaded kfm_arena (tools/*_kfm_arena.sh).
+/.kfm/
+# Built modules and play results (tools/build.sh, tools/build_in_sandbox.sh, tools/play.sh, CI):
+# modules are rebuilt by the recipe, never committed.
+/out/
+/examples/**/*.wasm
