@@ -5,8 +5,9 @@
 //! with the secret once. No JavaScript.
 
 use askama::Template;
+use axum::extract::multipart::MultipartRejection;
 use axum::extract::rejection::QueryRejection;
-use axum::extract::{Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Query, State};
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, LOCATION};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -17,11 +18,11 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::auth::{MaybeSession, Session};
-use crate::error::{AppError, AppResult, ErrorCode};
+use crate::error::{ApiError, ApiResult, AppError, AppResult, ErrorCode};
 use crate::extract::{ApiPath, FormBody};
 use crate::oauth::Provider;
 use crate::tokens::{self, Scope};
-use crate::{teams, users, AppState};
+use crate::{manifest, submissions, teams, users, AppState};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -34,6 +35,11 @@ pub fn routes() -> Router<AppState> {
             "/portal/teams/{id}/members/{user}/remove",
             post(remove_member),
         )
+        .route(
+            "/portal/teams/{id}/submissions",
+            post(submit).layer(DefaultBodyLimit::max(submissions::MAX_UPLOAD_BYTES)),
+        )
+        .route("/portal/teams/{id}/active", post(activate))
 }
 
 struct ProviderView {
@@ -58,12 +64,26 @@ struct MemberView {
     is_me: bool,
 }
 
+struct SubmissionView {
+    id: Uuid,
+    created: String,
+    state: String,
+    entry: String,
+    /// The first 12 hex digits of the module's SHA-256, or empty.
+    hash: String,
+    error: String,
+    has_log: bool,
+    is_ready: bool,
+    is_active: bool,
+}
+
 struct TeamView {
     id: Uuid,
     name: String,
     role: String,
     is_owner: bool,
     members: Vec<MemberView>,
+    submissions: Vec<SubmissionView>,
 }
 
 struct UserView {
@@ -85,7 +105,7 @@ struct NewTokenView {
 #[template(path = "index.html")]
 struct IndexPage {
     user: Option<UserView>,
-    error: Option<&'static str>,
+    error: Option<String>,
     notice: Option<String>,
     new_token: Option<NewTokenView>,
     engine_tag: String,
@@ -140,6 +160,27 @@ async fn user_view(state: &AppState, session: &Session) -> AppResult<UserView> {
     let mut team_views = Vec::new();
     for summary in teams::my_teams(db, session.user_id).await? {
         let team = teams::get_team(db, summary.id).await?;
+        let submissions = submissions::list_rows(db, team.id)
+            .await?
+            .into_iter()
+            .map(|row| SubmissionView {
+                id: row.id,
+                created: when(row.created_at),
+                entry: manifest::parse(&row.manifest)
+                    .map(|m| m.entry_display().to_owned())
+                    .unwrap_or_default(),
+                hash: row
+                    .module_hash
+                    .as_deref()
+                    .map(|h| hex::encode(h).chars().take(12).collect())
+                    .unwrap_or_default(),
+                error: row.error.unwrap_or_default(),
+                has_log: row.log_key.is_some(),
+                is_ready: row.state == "ready",
+                is_active: row.active,
+                state: row.state,
+            })
+            .collect();
         team_views.push(TeamView {
             id: team.id,
             name: team.name,
@@ -155,6 +196,7 @@ async fn user_view(state: &AppState, session: &Session) -> AppResult<UserView> {
                     role: m.role,
                 })
                 .collect(),
+            submissions,
         });
     }
     Ok(UserView {
@@ -191,7 +233,7 @@ fn page(status: StatusCode, html: String) -> Response {
 async fn render(
     state: &AppState,
     session: Option<&Session>,
-    error: Option<ErrorCode>,
+    error: Option<String>,
     notice: Option<String>,
     new_token: Option<NewTokenView>,
 ) -> AppResult<Response> {
@@ -201,7 +243,7 @@ async fn render(
     };
     let html = IndexPage {
         user,
-        error: error.map(ErrorCode::message),
+        error,
         notice,
         new_token,
         engine_tag: state.config.engine_tag.clone(),
@@ -214,8 +256,15 @@ async fn render(
 #[derive(Deserialize)]
 struct IndexQuery {
     error: Option<String>,
+    /// What exactly was refused (`bad_manifest`, `bad_source` only).
+    detail: Option<String>,
     linked: Option<String>,
 }
+
+/// The codes whose redirect may carry a detail.
+const DETAILED: [ErrorCode; 2] = [ErrorCode::BadManifest, ErrorCode::BadSource];
+/// The longest detail shown.
+const MAX_DETAIL_CHARS: usize = 300;
 
 /// `GET /`: sign in when signed out; the account, tokens and teams when signed in.
 async fn index(
@@ -227,7 +276,15 @@ async fn index(
     let error = query
         .as_ref()
         .and_then(|q| q.error.as_deref())
-        .and_then(ErrorCode::parse);
+        .and_then(ErrorCode::parse)
+        .map(|code| {
+            let detail = query
+                .as_ref()
+                .and_then(|q| q.detail.as_deref())
+                .filter(|_| DETAILED.contains(&code))
+                .map(|d| d.chars().take(MAX_DETAIL_CHARS).collect::<String>());
+            ApiError { code, detail }.message()
+        });
     let notice = query
         .as_ref()
         .and_then(|q| q.linked.as_deref())
@@ -237,8 +294,21 @@ async fn index(
 }
 
 fn back(error: Option<AppError>) -> Response {
+    back_detailed(error.map(ApiError::from))
+}
+
+/// Back to `/`, with `?error=<code>` and, for a detailed error, `&detail=`.
+fn back_detailed(error: Option<ApiError>) -> Response {
     let location = match error {
-        Some(err) => format!("/?error={}", err.code().as_str()),
+        Some(err) => {
+            let mut location = format!("/?error={}", err.code.as_str());
+            if let Some(detail) = err.detail.filter(|_| DETAILED.contains(&err.code)) {
+                let short: String = detail.chars().take(MAX_DETAIL_CHARS).collect();
+                location.push_str("&detail=");
+                location.extend(url::form_urlencoded::byte_serialize(short.as_bytes()));
+            }
+            location
+        }
         None => "/".to_owned(),
     };
     (StatusCode::SEE_OTHER, [(LOCATION, location)]).into_response()
@@ -367,6 +437,65 @@ async fn remove_member(
         async {
             let session = form_session(session, &form.csrf)?;
             teams::remove_member(&state.db, session.user_id, id, user).await
+        }
+        .await,
+    )
+}
+
+/// `POST /portal/teams/{id}/submissions`: multipart `csrf`, `language`,
+/// `entry` and the file `source.zip`; the manifest is made from the fields.
+async fn submit(
+    State(state): State<AppState>,
+    MaybeSession(session): MaybeSession,
+    ApiPath(id): ApiPath<Uuid>,
+    multipart: Result<Multipart, MultipartRejection>,
+) -> Response {
+    let result: ApiResult<()> = async {
+        let session = session.ok_or(AppError(ErrorCode::Unauthenticated))?;
+        let multipart = multipart.map_err(|_| AppError(ErrorCode::BadRequest))?;
+        let upload = submissions::read_upload(multipart).await?;
+        let field = |name: &str| {
+            upload
+                .fields
+                .iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.as_str())
+        };
+        session.check_csrf(field("csrf"))?;
+        let manifest = manifest::from_fields(
+            field("language").unwrap_or("cpp"),
+            field("entry").unwrap_or("."),
+        );
+        let zip = upload.zip.filter(|z| !z.is_empty()).ok_or_else(|| {
+            ApiError::with_detail(ErrorCode::BadSource, "choose a source.zip to upload")
+        })?;
+        submissions::create_submission(&state, id, session.user_id, &manifest, &zip)
+            .await
+            .map(|_| ())
+    }
+    .await;
+    back_detailed(result.err())
+}
+
+#[derive(Deserialize)]
+struct ActivateForm {
+    #[serde(default)]
+    csrf: String,
+    submission: Uuid,
+}
+
+async fn activate(
+    State(state): State<AppState>,
+    MaybeSession(session): MaybeSession,
+    ApiPath(id): ApiPath<Uuid>,
+    FormBody(form): FormBody<ActivateForm>,
+) -> Response {
+    done(
+        async {
+            let session = form_session(session, &form.csrf)?;
+            submissions::activate(&state, id, session.user_id, form.submission)
+                .await
+                .map(|_| ())
         }
         .await,
     )

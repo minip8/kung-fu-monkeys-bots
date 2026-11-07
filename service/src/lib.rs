@@ -1,22 +1,33 @@
 //! The Kung Fu Monkeys ladder service (architecture v0.63 §11, "M7 step 3
 //! design"; §8 "The ladder"). Step 3a: accounts through GitHub and Google
-//! OAuth, portal sessions, API tokens and teams, over Postgres. The HTTP
-//! surface is normative in `docs/ladder-api.md`.
+//! OAuth, portal sessions, API tokens and teams, over Postgres. Step 3b:
+//! submissions, the object store, the jobs table and the build worker. The
+//! HTTP surface is normative in `docs/ladder-api.md`.
 //!
 //! The binary is a thin CLI over [`serve`]; tests build an [`AppState`] with a
 //! [`Config`] of their own, bind a listener on port 0 and pass both in.
 
+pub mod archive;
+pub mod arena;
 pub mod auth;
+pub mod builder;
 pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod error;
 pub mod extract;
+pub mod jobs;
+pub mod manifest;
 pub mod oauth;
 pub mod portal;
+pub mod retention;
+pub mod store;
+pub mod submissions;
 pub mod teams;
 pub mod tokens;
 pub mod users;
+pub mod wasm;
+pub mod worker;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -32,13 +43,15 @@ use tokio::net::TcpListener;
 
 pub use crate::config::Config;
 use crate::error::{AppError, ErrorCode};
+pub use crate::store::Store;
 
-/// What every handler shares: the pool, the configuration and the outbound
-/// HTTP client (OAuth providers).
+/// What every handler shares: the pool, the configuration, the object store
+/// and the outbound HTTP client (OAuth providers).
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
     pub config: Arc<Config>,
+    pub store: Arc<Store>,
     pub(crate) http: reqwest::Client,
     pub(crate) google: Arc<oauth::GoogleCache>,
 }
@@ -52,8 +65,10 @@ impl AppState {
             .user_agent(concat!("kfm-ladder/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("the HTTP client builds with static settings");
+        let store = Store::new(&config.s3).expect("the object store client builds offline");
         AppState {
             db,
+            store: Arc::new(store),
             config: Arc::new(config),
             http,
             google: Arc::new(oauth::GoogleCache::default()),
@@ -70,6 +85,15 @@ pub fn routes() -> Router<AppState> {
         .route("/tokens/{id}", delete(tokens::revoke))
         .route("/teams", get(teams::list_mine).post(teams::create))
         .route("/teams/{id}", get(teams::show))
+        .route(
+            "/teams/{id}/submissions",
+            get(submissions::list).post(submissions::create).layer(
+                axum::extract::DefaultBodyLimit::max(submissions::MAX_UPLOAD_BYTES),
+            ),
+        )
+        .route("/teams/{id}/active", post(submissions::activate_route))
+        .route("/submissions/{id}", get(submissions::show))
+        .route("/submissions/{id}/log", get(submissions::log))
         .route("/teams/{id}/members", post(teams::add_member_route))
         .route(
             "/teams/{id}/members/{user}",

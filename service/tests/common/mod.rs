@@ -18,7 +18,7 @@ use axum::{Form, Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use kfm_ladder::config::{Config, OAuthApp, S3Config};
-use kfm_ladder::AppState;
+use kfm_ladder::{AppState, Store};
 use openidconnect::core::{
     CoreIdToken, CoreIdTokenClaims, CoreJsonWebKeySet, CoreJwsSigningAlgorithm,
     CoreRsaPrivateSigningKey,
@@ -431,10 +431,51 @@ pub async fn start_fake() -> Fake {
     fake
 }
 
+/// The test object store: `KFM_LADDER_TEST_S3_ENDPOINT` (a MinIO, e.g.
+/// `http://127.0.0.1:9000`), with `KFM_LADDER_TEST_S3_ACCESS_KEY`,
+/// `_SECRET_KEY` and `_BUCKET` defaulting to the compose stack's `kfm-dev`,
+/// `kfm-dev-secret` and `kfm-ladder-test`. `None` when the endpoint is unset.
+pub fn test_s3() -> Option<S3Config> {
+    let var = |name: &str, default: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| default.to_owned())
+    };
+    let endpoint = std::env::var("KFM_LADDER_TEST_S3_ENDPOINT")
+        .ok()
+        .filter(|v| !v.is_empty())?;
+    Some(S3Config {
+        endpoint: endpoint
+            .parse()
+            .expect("KFM_LADDER_TEST_S3_ENDPOINT is a URL"),
+        bucket: var("KFM_LADDER_TEST_S3_BUCKET", "kfm-ladder-test"),
+        access_key: var("KFM_LADDER_TEST_S3_ACCESS_KEY", "kfm-dev"),
+        secret_key: var("KFM_LADDER_TEST_S3_SECRET_KEY", "kfm-dev-secret"),
+        region: var("KFM_LADDER_TEST_S3_REGION", "us-east-1"),
+    })
+}
+
+/// The test store with its bucket made, or `None` (and a line saying why the
+/// test is skipped) when `KFM_LADDER_TEST_S3_ENDPOINT` is unset.
+pub async fn test_store(test: &str) -> Option<Store> {
+    let Some(config) = test_s3() else {
+        eprintln!("{test}: skipped: KFM_LADDER_TEST_S3_ENDPOINT is unset (a MinIO; service/README.md \"Test\")");
+        return None;
+    };
+    let store = Store::new(&config).unwrap();
+    store.ensure_bucket().await.unwrap();
+    Some(store)
+}
+
 pub struct TestApp {
     pub base: String,
     pub db: PgPool,
     pub fake: Fake,
+    /// The service's store: the test MinIO when KFM_LADDER_TEST_S3_ENDPOINT
+    /// is set (bucket made), else a client of an address nothing serves.
+    pub store: Store,
+    pub state: AppState,
 }
 
 pub fn config(public_url: &str, fake: &Fake) -> Config {
@@ -455,13 +496,13 @@ pub fn config(public_url: &str, fake: &Fake) -> Config {
         github_token_url: format!("{}/github/token", fake.base).parse().unwrap(),
         github_api_url: format!("{}/github/api", fake.base),
         google_issuer: fake.google_issuer(),
-        s3: S3Config {
-            endpoint: "http://127.0.0.1:9000".parse().unwrap(),
+        s3: test_s3().unwrap_or_else(|| S3Config {
+            endpoint: "http://127.0.0.1:9".parse().unwrap(),
             bucket: "kfm".to_owned(),
             access_key: "minio".to_owned(),
             secret_key: "minio-secret".to_owned(),
             region: "auto".to_owned(),
-        },
+        }),
         engine_tag: "v0.5.1".to_owned(),
         arena: None,
         sentry_dsn: None,
@@ -475,9 +516,19 @@ pub async fn start_with(db: PgPool, extra: Router<AppState>) -> TestApp {
     let addr: SocketAddr = listener.local_addr().unwrap();
     let base = format!("http://{addr}");
     let state = AppState::new(db.clone(), config(&base, &fake));
-    let router = kfm_ladder::routes().merge(extra).with_state(state);
+    if test_s3().is_some() {
+        state.store.ensure_bucket().await.unwrap();
+    }
+    let store = (*state.store).clone();
+    let router = kfm_ladder::routes().merge(extra).with_state(state.clone());
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    TestApp { base, db, fake }
+    TestApp {
+        base,
+        db,
+        fake,
+        store,
+        state,
+    }
 }
 
 pub async fn start(db: PgPool) -> TestApp {
@@ -636,4 +687,145 @@ pub async fn github_browser(app: &TestApp, id: u64, login: &str) -> Browser {
         .sign_in(app, Provider::GitHub, FakeUser::new(&id.to_string(), login))
         .await;
     browser
+}
+
+/// Whether the store tests can run; prints why not.
+pub fn have_store(test: &str) -> bool {
+    if test_s3().is_some() {
+        return true;
+    }
+    eprintln!(
+        "{test}: skipped: KFM_LADDER_TEST_S3_ENDPOINT is unset (a MinIO; service/README.md \"Test\")"
+    );
+    false
+}
+
+/// A token of `scope` for the browser's user; its secret.
+pub async fn new_token(browser: &mut Browser, scope: &str) -> String {
+    let csrf = browser.csrf().await;
+    let response = browser
+        .json(
+            reqwest::Method::POST,
+            "/tokens",
+            Some(serde_json::json!({ "name": format!("t-{scope}"), "scope": scope })),
+            Some(&csrf),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: serde_json::Value = response.json().await.unwrap();
+    body["secret"].as_str().unwrap().to_owned()
+}
+
+/// A new team owned by the browser's user; its id.
+pub async fn new_team(browser: &mut Browser, name: &str) -> String {
+    let csrf = browser.csrf().await;
+    let response = browser
+        .json(
+            reqwest::Method::POST,
+            "/teams",
+            Some(serde_json::json!({ "name": name })),
+            Some(&csrf),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: serde_json::Value = response.json().await.unwrap();
+    body["id"].as_str().unwrap().to_owned()
+}
+
+/// A zip of `(name, contents)` pairs.
+pub fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::Write;
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for (name, data) in files {
+        writer.start_file(*name, options).unwrap();
+        writer.write_all(data).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
+}
+
+/// The repository's directory `rel` (from the repository root) zipped under
+/// `prefix` (no prefix: at the root), its files only, one level deep.
+pub fn zip_dir(rel: &str, prefix: &str) -> Vec<u8> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(rel);
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            let name = path.file_name().unwrap().to_str().unwrap().to_owned();
+            files.push((format!("{prefix}{name}"), std::fs::read(&path).unwrap()));
+        }
+    }
+    files.sort();
+    let refs: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_slice()))
+        .collect();
+    zip_of(&refs)
+}
+
+/// The usual valid upload: one C file at the root.
+pub fn tiny_bot_zip() -> Vec<u8> {
+    zip_of(&[("bot.c", b"int x;\n")])
+}
+
+/// `POST /teams/{team}/submissions` with a bearer.
+pub async fn upload(
+    app: &TestApp,
+    secret: &str,
+    team: &str,
+    manifest: &str,
+    zip: Vec<u8>,
+) -> reqwest::Response {
+    let form = reqwest::multipart::Form::new()
+        .part(
+            "manifest.toml",
+            reqwest::multipart::Part::text(manifest.to_owned()).file_name("manifest.toml"),
+        )
+        .part(
+            "source.zip",
+            reqwest::multipart::Part::bytes(zip)
+                .file_name("source.zip")
+                .mime_str("application/zip")
+                .unwrap(),
+        );
+    reqwest::Client::new()
+        .post(format!("{}/teams/{team}/submissions", app.base))
+        .bearer_auth(secret)
+        .multipart(form)
+        .send()
+        .await
+        .unwrap()
+}
+
+/// A request with a bearer.
+pub async fn bearer_json(
+    app: &TestApp,
+    method: reqwest::Method,
+    path: &str,
+    secret: &str,
+    body: Option<serde_json::Value>,
+) -> reqwest::Response {
+    let mut request = reqwest::Client::new()
+        .request(method, format!("{}{path}", app.base))
+        .bearer_auth(secret);
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    request.send().await.unwrap()
+}
+
+/// Moves every submission of `team` a few minutes into the past, so the next
+/// upload passes the once-a-minute rule.
+pub async fn age_submissions(db: &PgPool, team: &str) {
+    sqlx::query(
+        "UPDATE submissions SET created_at = created_at - interval '2 minutes' WHERE team_id = $1::uuid",
+    )
+    .bind(team)
+    .execute(db)
+    .await
+    .unwrap();
 }
