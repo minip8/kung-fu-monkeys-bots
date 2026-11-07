@@ -466,9 +466,13 @@ impl MatchWorker {
             .map_err(JobError::retry)?;
         let tag = &self.settings.engine_tag;
         let mut tx = self.db.begin().await?;
-        // Both rows exist, then both are locked in one order (no deadlock
-        // between two games of the same teams on two workers).
-        for team in [payload.team_a, payload.team_b] {
+        // Both rows exist, then both are locked, each step in team id order:
+        // every game takes its two teams' row locks in one global order, so
+        // concurrent games on several workers never wait on each other in a
+        // cycle.
+        let mut ordered = [payload.team_a, payload.team_b];
+        ordered.sort();
+        for team in ordered {
             let fresh = Rating::default();
             sqlx::query(
                 "INSERT INTO ratings (season_id, team_id, mu, phi, sigma) VALUES ($1, $2, $3, $4, $5) \
