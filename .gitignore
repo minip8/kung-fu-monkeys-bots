@@ -1,0 +1,4 @@
+# The engine clone, its build and the downloaded kfm_arena (tools/*_kfm_arena.sh).
+.kfm/
+# Built modules and play results (tools/build_in_sandbox.sh, tools/play.sh, CI).
+out/
