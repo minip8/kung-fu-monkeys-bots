@@ -7,7 +7,9 @@
 //! [`Config`] of their own, bind a listener on port 0 and pass both in.
 
 pub mod archive;
+pub mod arena;
 pub mod auth;
+pub mod builder;
 pub mod config;
 pub mod crypto;
 pub mod db;
@@ -22,6 +24,7 @@ pub mod submissions;
 pub mod teams;
 pub mod tokens;
 pub mod users;
+pub mod wasm;
 pub mod worker;
 
 use std::future::Future;
