@@ -230,7 +230,7 @@ async fn the_starter_example_builds_validates_and_is_ready(pool: PgPool) {
         "exit status 0",
         "module checks:",
         "--mode contest --team",
-        "smoke match: 1 match(es), 1 module slot(s)",
+        "smoke match: 1 match(es), 5 module slot(s)",
         "READY",
     ] {
         assert!(log.contains(needle), "{needle:?} not in the log:\n{log}");

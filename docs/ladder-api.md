@@ -433,8 +433,11 @@ removed by name). The only result that counts is `OUT/bot.wasm`: the module is s
    memory, table or global; one 32-bit memory of its own with an initial size of at most 256
    pages (16 MiB); the exports `memory`, `kfm_abi_version : () -> i32`,
    `kfm_obs_buffer : () -> i32`, `kfm_init : (i64, i32) -> ()` and `kfm_act : (i32) -> i64`;
-2. plays one smoke match with the season's released `kfm_arena`, `kfm_arena --mode contest
-   --team <module> --team ref:hard --matches 1 --ticks 3600 --json --result <file> --quiet`,
+2. plays one smoke match with the season's released `kfm_arena` in the ranked shape (5v5,
+   v1.2: the module fills its five slots against five `ref:hard`; before, 1v1, which costs
+   less fuel per tick than a ranked game), `kfm_arena --mode contest --team <module>,<module>,
+   <module>,<module>,<module> --team ref:hard,ref:hard,ref:hard,ref:hard,ref:hard --matches 1
+   --ticks 3600 --json --result <file> --quiet`,
    and reads its match objects (the engine's `docs/arena-result.md`): a module slot with
    `traps`, `over` or `bad` above 0, or `dead` not null, rejects the submission, and so does
    `kfm_arena` refusing the module at load (exit 3).

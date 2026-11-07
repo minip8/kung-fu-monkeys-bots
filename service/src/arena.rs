@@ -110,9 +110,24 @@ pub struct Run {
     pub stderr: String,
 }
 
-/// Plays the smoke match: `kfm_arena --mode <mode> --team <module> --team
-/// ref:hard --matches 1 --ticks 3600 --json --result <result> --quiet`.
-/// `Err` when the run could not start or took longer than `timeout`.
+/// The slots of one side in the contest (5v5): each side's module fills all
+/// of its team's slots (`--team` takes one spec per slot; one spec alone
+/// would make a team of one, and `kfm_arena` sizes every team by the longest
+/// list). The ranked games and the smoke match use the same shape, so a
+/// module is validated the way it is ranked (ten monkeys cost more fuel per
+/// tick than two).
+pub const TEAM_SIZE: usize = 5;
+
+/// The `--team` list of one side: its spec once per slot.
+pub fn team_list(spec: &str) -> String {
+    [spec; TEAM_SIZE].join(",")
+}
+
+/// Plays the smoke match: `kfm_arena --mode <mode> --team <module>,... --team
+/// ref:hard,... --matches 1 --ticks 3600 --json --result <result> --quiet`,
+/// each side's list `TEAM_SIZE` long. `Err` when the run could not start or
+/// took longer than `timeout`. The module's path must hold no comma (a spec
+/// list splits on it); the worker's job directories never do.
 pub async fn smoke(
     arena: &Path,
     mode: &str,
@@ -121,13 +136,19 @@ pub async fn smoke(
     timeout: Duration,
 ) -> Result<Run, String> {
     let ticks = SMOKE_TICKS.to_string();
+    let module = module.to_str().ok_or("the module's path is not UTF-8")?;
+    if module.contains(',') {
+        return Err(format!("the module's path {module:?} holds a comma"));
+    }
+    let modules = team_list(module);
+    let references = team_list("ref:hard");
     let args: Vec<&std::ffi::OsStr> = vec![
         "--mode".as_ref(),
         mode.as_ref(),
         "--team".as_ref(),
-        module.as_os_str(),
+        modules.as_ref(),
         "--team".as_ref(),
-        "ref:hard".as_ref(),
+        references.as_ref(),
         "--matches".as_ref(),
         "1".as_ref(),
         "--ticks".as_ref(),

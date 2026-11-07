@@ -40,10 +40,9 @@ use crate::store::Store;
 use crate::worker::{Handler, JobError};
 use crate::{arena, crypto};
 
-/// The slots of one side in the contest (5v5): each side's module fills all
-/// of its team's slots (`--team` takes one spec per slot; one spec alone
-/// would make a team of one).
-pub const TEAM_SIZE: usize = 5;
+/// The slots of one side in the contest (5v5), shared with the validation
+/// smoke match so a module is validated the way it is ranked.
+pub use crate::arena::{team_list, TEAM_SIZE};
 /// Games per job: the two sides of one pair (`--matches 2 --rotate`).
 pub const GAMES: usize = 2;
 /// How long one run may take on the worker's clock. Two capped games of 10
@@ -248,11 +247,6 @@ pub fn parse_games(jsonl: &str) -> Result<Vec<GameResult>, String> {
         return Err(format!("expected games 0 and 1, found {indices:?}"));
     }
     Ok(games)
-}
-
-/// The `--team` list of one side: its module once per slot.
-pub fn team_list(module: &str) -> String {
-    [module; TEAM_SIZE].join(",")
 }
 
 /// A job's directory, removed when dropped.
