@@ -38,7 +38,7 @@ use crate::config::{ConfigError, WorkerConfig};
 use crate::jobs::{self, Job, Kind};
 use crate::store::{self, Store};
 use crate::worker::{Handler, JobError};
-use crate::{archive, arena, crypto, manifest, wasm};
+use crate::{archive, arena, crypto, manifest, retention, wasm};
 
 /// The sandbox's own limit (`timeout 120` inside the container).
 pub const SANDBOX_SECONDS: u64 = 120;
@@ -676,6 +676,11 @@ impl BuildWorker {
                 )
                 .await?;
                 tracing::info!(submission = %id, team = %row.team_id, "module ready");
+                // A failed prune is retried by the next ready submission;
+                // it never undoes this one.
+                if let Err(err) = retention::prune_team(&self.db, &self.store, row.team_id).await {
+                    tracing::warn!(team = %row.team_id, error = %err, "retention failed");
+                }
                 Ok(())
             }
             arena::Verdict::Faulty(faults) => {

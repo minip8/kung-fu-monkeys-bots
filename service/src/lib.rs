@@ -19,6 +19,7 @@ pub mod jobs;
 pub mod manifest;
 pub mod oauth;
 pub mod portal;
+pub mod retention;
 pub mod store;
 pub mod submissions;
 pub mod teams;

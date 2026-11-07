@@ -409,3 +409,163 @@ async fn a_submission_is_visible_to_its_team_only(pool: PgPool) {
         .unwrap();
     refused(response, StatusCode::UNAUTHORIZED, "unauthenticated").await;
 }
+
+/// A submission's id and its source, log and module keys.
+type KeyRow = (String, Option<String>, Option<String>, Option<String>);
+
+/// Marks a submission finished as a worker would: its state, a log object,
+/// and for a ready one a module object.
+async fn finish_as(app: &TestApp, id: &str, state: &str) {
+    let log_key = format!("logs/{id}.txt");
+    app.store
+        .put(&log_key, b"log\n", "text/plain")
+        .await
+        .unwrap();
+    let module_key = (state == "ready").then(|| format!("modules/{id}.wasm"));
+    if let Some(key) = &module_key {
+        app.store
+            .put(key, b"\0asm\x01\0\0\0", "application/wasm")
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "UPDATE submissions SET state = $2, log_key = $3, module_key = $4 WHERE id = $1::uuid",
+    )
+    .bind(id)
+    .bind(state)
+    .bind(&log_key)
+    .bind(&module_key)
+    .execute(&app.db)
+    .await
+    .unwrap();
+}
+
+#[sqlx::test]
+async fn retention_keeps_five_plus_the_active_one_and_every_module(pool: PgPool) {
+    if !have_store("retention_keeps_five_plus_the_active_one_and_every_module") {
+        return;
+    }
+    let app = start(pool).await;
+    let (_, team, token) = owner(&app, 5020, "Keepers").await;
+    let mut ids = Vec::new();
+    for _ in 0..8 {
+        let response = upload(&app, &token, &team, MANIFEST, tiny_bot_zip()).await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let sub: Value = response.json().await.unwrap();
+        ids.push(sub["id"].as_str().unwrap().to_owned());
+        age_submissions(&app.db, &team).await;
+    }
+    // Oldest first: 0 still queued, 1 ready (to be active), 2 ready, then
+    // five more finished ones.
+    for (i, state) in [
+        (1, "ready"),
+        (2, "ready"),
+        (3, "failed"),
+        (4, "rejected"),
+        (5, "ready"),
+        (6, "failed"),
+        (7, "ready"),
+    ] {
+        finish_as(&app, &ids[i], state).await;
+    }
+    let response = bearer_json(
+        &app,
+        Method::POST,
+        &format!("/teams/{team}/active"),
+        &token,
+        Some(json!({ "submission": ids[1] })),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let team_id = uuid::Uuid::parse_str(&team).unwrap();
+    let pruned = kfm_ladder::retention::prune_team(&app.db, &app.store, team_id)
+        .await
+        .unwrap();
+    assert_eq!(pruned, 1, "only submission 2 goes");
+    let keys: Vec<KeyRow> = sqlx::query_as(
+        "SELECT id::text, source_key, log_key, module_key FROM submissions ORDER BY created_at",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    for (i, (id, source, log, module)) in keys.iter().enumerate() {
+        assert_eq!(id, &ids[i]);
+        if i == 2 {
+            assert_eq!((source, log), (&None, &None), "2 is pruned");
+            assert!(module.is_some(), "a module is never pruned");
+        } else {
+            assert!(source.is_some(), "{i} keeps its source");
+        }
+    }
+    assert_eq!(
+        app.store
+            .get(&format!("sources/{}.zip", ids[2]))
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        app.store
+            .get(&format!("logs/{}.txt", ids[2]))
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(app
+        .store
+        .get(&format!("modules/{}.wasm", ids[2]))
+        .await
+        .unwrap()
+        .is_some());
+    assert!(app
+        .store
+        .get(&format!("sources/{}.zip", ids[1]))
+        .await
+        .unwrap()
+        .is_some());
+
+    // The list leaves the pruned one out; it is still shown by id.
+    let listed: Value = bearer_json(
+        &app,
+        Method::GET,
+        &format!("/teams/{team}/submissions"),
+        &token,
+        None,
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let listed: Vec<&str> = listed["submissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    let mut expected: Vec<&str> = ids.iter().map(String::as_str).collect();
+    expected.remove(2);
+    expected.reverse();
+    assert_eq!(listed, expected);
+    let shown: Value = bearer_json(
+        &app,
+        Method::GET,
+        &format!("/submissions/{}", ids[2]),
+        &token,
+        None,
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(shown["state"], "ready");
+    assert_eq!(shown["log_url"], Value::Null);
+
+    // Pruning again changes nothing.
+    assert_eq!(
+        kfm_ladder::retention::prune_team(&app.db, &app.store, team_id)
+            .await
+            .unwrap(),
+        0
+    );
+}

@@ -387,3 +387,71 @@ async fn a_build_that_cannot_run_fails_after_its_attempts(pool: PgPool) {
     .await;
     assert_eq!(again.status(), StatusCode::ACCEPTED);
 }
+
+#[sqlx::test]
+async fn the_sixth_ready_submission_prunes_the_oldest(pool: PgPool) {
+    if !have_sandbox("the_sixth_ready_submission_prunes_the_oldest") {
+        return;
+    }
+    let app = start(pool).await;
+    let (team, token) = owner(&app, 7005).await;
+    // Five finished submissions, oldest first, each with its objects.
+    let mut old = Vec::new();
+    for minutes in (2..7).rev() {
+        let id = uuid::Uuid::now_v7();
+        let (source, log) = (format!("sources/{id}.zip"), format!("logs/{id}.txt"));
+        app.store
+            .put(&source, b"zip", "application/zip")
+            .await
+            .unwrap();
+        app.store.put(&log, b"log", "text/plain").await.unwrap();
+        sqlx::query(
+            "INSERT INTO submissions (id, team_id, manifest, source_key, log_key, state, created_at) \
+             VALUES ($1, $2::uuid, 'language = \"c\"', $3, $4, 'failed', now() - make_interval(mins => $5))",
+        )
+        .bind(id)
+        .bind(&team)
+        .bind(&source)
+        .bind(&log)
+        .bind(minutes)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        old.push(id);
+    }
+    let id = submit(
+        &app,
+        &token,
+        &team,
+        "language = \"c\"\n",
+        zip_dir("examples/idle", ""),
+    )
+    .await;
+    let running = RunningWorker::start(&app, settings);
+    assert_eq!(settled(&app.db, &id).await, "ready");
+    running.stop().await;
+    let kept: Vec<(uuid::Uuid, bool)> =
+        sqlx::query_as("SELECT id, source_key IS NOT NULL FROM submissions ORDER BY created_at")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    let pruned: Vec<_> = kept
+        .iter()
+        .filter(|(_, has)| !has)
+        .map(|(id, _)| *id)
+        .collect();
+    assert_eq!(pruned, [old[0]], "the oldest of six finished goes");
+    assert_eq!(
+        app.store
+            .get(&format!("sources/{}.zip", old[0]))
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(app
+        .store
+        .get(&format!("sources/{}.zip", old[1]))
+        .await
+        .unwrap()
+        .is_some());
+}

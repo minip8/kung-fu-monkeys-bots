@@ -218,3 +218,96 @@ async fn names_are_escaped(pool: PgPool) {
     assert!(!html.contains("<img src=x"));
     assert!(html.contains("&#60;img") || html.contains("&lt;img"));
 }
+
+#[sqlx::test]
+async fn the_portal_submits_lists_and_activates(pool: PgPool) {
+    if !common::have_store("the_portal_submits_lists_and_activates") {
+        return;
+    }
+    let app = start(pool).await;
+    let mut browser = github_browser(&app, 4010, "portal-submitter").await;
+    let team = common::new_team(&mut browser, "Portal Team").await;
+    let html = page(&mut browser, "/").await;
+    assert!(html.contains(&format!(
+        "action=\"/portal/teams/{team}/submissions\" enctype=\"multipart/form-data\""
+    )));
+    assert!(html.contains("No submissions yet."));
+    let csrf = csrf_in(&html);
+
+    let form = |csrf: &str, zip: Vec<u8>| {
+        reqwest::multipart::Form::new()
+            .text("csrf", csrf.to_owned())
+            .text("language", "c")
+            .text("entry", "")
+            .part(
+                "source.zip",
+                reqwest::multipart::Part::bytes(zip).file_name("bot.zip"),
+            )
+    };
+    let path = format!("{}/portal/teams/{team}/submissions", app.base);
+
+    // A wrong CSRF token changes nothing.
+    let request = browser
+        .http
+        .post(&path)
+        .multipart(form("nope", common::tiny_bot_zip()));
+    let response = browser.send(request).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response), "/?error=bad_csrf");
+
+    // A refused archive comes back with what was wrong.
+    let bad = common::zip_of(&[("../x.c", b"x")]);
+    let request = browser.http.post(&path).multipart(form(&csrf, bad));
+    let response = browser.send(request).await;
+    let landed = location(&response);
+    assert!(landed.starts_with("/?error=bad_source&detail="), "{landed}");
+    let html = page(&mut browser, &landed).await;
+    assert!(
+        html.contains("The source archive is refused: &#34;../x.c&#34; contains a .. component."),
+        "{html}"
+    );
+    // A detail is shown only for the codes that carry one.
+    let html = page(&mut browser, "/?error=forbidden&detail=injected").await;
+    assert!(!html.contains("injected"));
+
+    let request = browser
+        .http
+        .post(&path)
+        .multipart(form(&csrf, common::tiny_bot_zip()));
+    let response = browser.send(request).await;
+    assert_eq!(location(&response), "/");
+    let (id, state): (uuid::Uuid, String) = sqlx::query_as("SELECT id, state FROM submissions")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(state, "queued");
+    let html = page(&mut browser, "/").await;
+    assert!(html.contains("queued"));
+    assert!(
+        !html.contains(&format!("value=\"{id}\"")),
+        "no activate button while queued"
+    );
+
+    // Ready (as a worker would leave it): a log link and an activate button.
+    sqlx::query(
+        "UPDATE submissions SET state = 'ready', log_key = 'logs/x.txt', \
+         module_hash = decode(repeat('ab', 32), 'hex')",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let html = page(&mut browser, "/").await;
+    assert!(html.contains(&format!("href=\"/submissions/{id}/log\"")));
+    assert!(html.contains("<code title=\"SHA-256 of the module\">abababababab</code>"));
+    assert!(html.contains(&format!("name=\"submission\" value=\"{id}\"")));
+    let response = browser
+        .post_form(
+            &format!("/portal/teams/{team}/active"),
+            &[("csrf", &csrf), ("submission", &id.to_string())],
+        )
+        .await;
+    assert_eq!(location(&response), "/");
+    let html = page(&mut browser, "/").await;
+    assert!(html.contains("<strong class=\"good\">active</strong>"));
+    assert!(!html.contains(&format!("name=\"submission\" value=\"{id}\"")));
+}

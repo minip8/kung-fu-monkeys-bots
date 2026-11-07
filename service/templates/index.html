@@ -30,6 +30,9 @@
   .muted { color: var(--muted); }
   .signin a.button { margin: 0 8px 8px 0; }
   .team { margin: 0 0 16px; }
+  h3 { font-size: 1rem; margin: 16px 0 6px; }
+  .good { color: var(--good); }
+  input[type=file] { font: inherit; min-width: 0; flex: 1 1 200px; }
 </style>
 </head>
 <body>
@@ -112,6 +115,32 @@
       <button type="submit">Add member</button>
     </form>
     {% endif %}
+    <h3>Submissions</h3>
+    {% if team.submissions.is_empty() %}<p class="muted">No submissions yet.</p>
+    {% else %}
+    <table>
+      <tr><th>Submitted</th><th>State</th><th>Module</th><th></th><th></th></tr>
+      {% for s in team.submissions %}
+      <tr>
+        <td>{{ s.created }}<br><span class="muted">entry {{ s.entry }}</span></td>
+        <td>{{ s.state }}{% if s.is_active %} <strong class="good">active</strong>{% endif %}{% if !s.error.is_empty() %}<br><span class="muted">{{ s.error }}</span>{% endif %}</td>
+        <td>{% if !s.hash.is_empty() %}<code title="SHA-256 of the module">{{ s.hash }}</code>{% endif %}</td>
+        <td>{% if s.has_log %}<a href="/submissions/{{ s.id }}/log">log</a>{% endif %}</td>
+        <td>{% if s.is_ready && !s.is_active %}<form class="inline" method="post" action="/portal/teams/{{ team.id }}/active">
+            <input type="hidden" name="csrf" value="{{ user.csrf }}"><input type="hidden" name="submission" value="{{ s.id }}">
+            <button class="quiet" type="submit">Activate</button></form>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    <form class="row" method="post" action="/portal/teams/{{ team.id }}/submissions" enctype="multipart/form-data">
+      <input type="hidden" name="csrf" value="{{ user.csrf }}">
+      <select name="language"><option value="cpp">C++</option><option value="c">C</option></select>
+      <input type="text" name="entry" placeholder="Entry directory in the zip (default .)" maxlength="255">
+      <input type="file" name="source.zip" accept=".zip,application/zip" required>
+      <button type="submit">Submit</button>
+    </form>
+    <p class="muted">A zip of the bot's sources (at most 4 MiB), built by the ladder with the pinned toolchain and checked in one match against the reference bot. One submission per team per minute; the five most recent are kept, plus the active one.</p>
   </div>
   {% endfor %}
   <form class="row" method="post" action="/portal/teams">
