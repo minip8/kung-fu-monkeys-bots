@@ -6,3 +6,5 @@
 /examples/**/*.wasm
 # The ladder service's build (service/README.md).
 /service/target/
+# The kfm CLI's build and wheels (cli/README.md).
+/cli/target/
