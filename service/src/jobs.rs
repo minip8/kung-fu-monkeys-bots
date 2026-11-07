@@ -12,7 +12,8 @@ pub enum Kind {
     Build,
     /// A built module through the checks and the smoke match (`{"submission": id}`).
     Validate,
-    /// One two-sided `kfm_arena` run (step 4).
+    /// One pair of a scheduler round, played from both sides by one
+    /// `kfm_arena` run ([`crate::scheduler::MatchPayload`]).
     Match,
 }
 

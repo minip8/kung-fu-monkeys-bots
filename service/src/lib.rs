@@ -1,8 +1,9 @@
 //! The Kung Fu Monkeys ladder service (architecture v0.63 §11, "M7 step 3
 //! design"; §8 "The ladder"). Step 3a: accounts through GitHub and Google
 //! OAuth, portal sessions, API tokens and teams, over Postgres. Step 3b:
-//! submissions, the object store, the jobs table and the build worker. The
-//! HTTP surface is normative in `docs/ladder-api.md`.
+//! submissions, the object store, the jobs table and the build worker. Step
+//! 4: seasons, the scheduler, the match worker, Glicko-2 ratings and the
+//! ladder. The HTTP surface is normative in `docs/ladder-api.md`.
 //!
 //! The binary is a thin CLI over [`serve`]; tests build an [`AppState`] with a
 //! [`Config`] of their own, bind a listener on port 0 and pass both in.

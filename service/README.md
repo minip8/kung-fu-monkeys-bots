@@ -4,25 +4,31 @@ The Kung Fu Monkeys ladder service (engine architecture v0.63, §11 "M7 step 3 d
 "The ladder"): accounts through GitHub or Google sign-in, portal sessions, API tokens and teams
 over Postgres, as JSON routes and a server-rendered portal from one binary (step 3a); then
 submissions, the object store, the jobs table and the build worker that turns a submission's
-source into a validated module (step 3b). Matches, ratings and replays follow (step 4); their
-tables already exist, and `worker match` is a stub until then.
+source into a validated module (step 3b); then seasons, the scheduler's Swiss-style rounds, the
+match worker that plays each pair with the released `kfm_arena`, Glicko-2 ratings, replays and
+the public ladder (step 4).
 
 The HTTP surface is normative in [`docs/ladder-api.md`](../docs/ladder-api.md); change it
 there first.
 
 | Path | What |
 |---|---|
-| `src/main.rs` | The CLI: `serve`, `migrate`, `worker build`, `worker match`. |
+| `src/main.rs` | The CLI: `serve`, `migrate`, `season create|list`, `worker build`, `worker match`. |
 | `src/config.rs` | The environment, per role (`Config` for `serve`, `WorkerConfig`, `database_url_from`). |
 | `src/oauth.rs` | GitHub (`oauth2`) and Google (`openidconnect`, discovery) sign-in, linking, logout. |
 | `src/auth.rs` | Session cookies, the `Caller` extractor (session or bearer), CSRF. |
 | `src/tokens.rs`, `src/teams.rs`, `src/users.rs` | The JSON routes and the functions the portal shares. |
-| `src/portal.rs`, `templates/index.html` | The portal (askama, no JavaScript). |
+| `src/portal.rs`, `templates/` | The portal (askama, no JavaScript; `base.html` is the layout). |
 | `src/submissions.rs`, `src/manifest.rs`, `src/archive.rs` | Uploads (the manifest, the zip's checks and unpacking), listing, activation. |
 | `src/store.rs` | The object store (the S3 API through `rust-s3`, path-style): put, get, delete, presigned GET. |
 | `src/jobs.rs`, `src/worker.rs` | The job queue (claim, heartbeat, retry, sweep) and the worker loop. |
 | `src/builder.rs`, `src/wasm.rs`, `src/arena.rs` | The build worker: the sandbox run, the module's load checks, the smoke match. |
 | `src/retention.rs` | Pruning sources and logs past five finished submissions. |
+| `src/seasons.rs` | Seasons (non-overlapping windows), the `season` subcommand's functions, `GET /seasons`. |
+| `src/scheduler.rs` | The rounds: eligibility, the pairing, the seeds, the advisory-locked loop in `serve`. |
+| `src/match_worker.rs` | The match worker: the `kfm_arena` run of a pair, its result parsed, games, replays and ratings recorded. |
+| `src/glicko.rs` | Glicko-2 and the release widening. |
+| `src/ladder.rs`, `templates/ladder.html`, `templates/match.html` | `GET /ladder`, `GET /matches`, `GET /matches/{m}`, a team's standing; their portal pages. |
 | `src/error.rs` | `AppError`: every error code, its status and message. |
 | `migrations/` | The schema (sqlx migrations, embedded in the binary, run at start). |
 | `tests/` | Integration tests over a real Postgres with fake OAuth providers in process. |
@@ -30,15 +36,18 @@ there first.
 ## Commands
 
 ```sh
-kfm-ladder serve           # migrate, then serve the API and the portal on KFM_LADDER_LISTEN
+kfm-ladder serve           # migrate, then serve the API and the portal on KFM_LADDER_LISTEN, and schedule rounds
 kfm-ladder migrate         # apply pending migrations and exit (needs DATABASE_URL only)
+kfm-ladder season create NAME --start RFC3339 --end RFC3339 [--mode contest]   # an operator's new season
+kfm-ladder season list     # name, start, end, mode, id; "current" on the one whose window holds now
 kfm-ladder worker build    # claim build and validate jobs until SIGTERM
-kfm-ladder worker match    # claim match jobs until SIGTERM (step 4; each fails as not implemented)
+kfm-ladder worker match    # claim match jobs until SIGTERM
 ```
 
 Exit codes: 0 done (a worker stopped by SIGTERM), 1 a runtime failure (the database
-unreachable for 60 s, a failed migration, the listen address taken), 2 a configuration error
-(the variable is named). Workers never migrate; on SIGTERM they stop claiming and finish the
+unreachable for 60 s, a failed migration, the listen address taken, a season refused: its name
+taken or its window overlapping another's), 2 a configuration error (the variable is named) or
+a bad argument (a time that is not RFC 3339). Workers never migrate; on SIGTERM they stop claiming and finish the
 job in hand (`kfm-ladder-build.service` waits 200 s for it). `RUST_LOG` filters the log (default `info`); it is coloured
 only on a terminal. Build with `--no-default-features` to leave Sentry out entirely. Caddy
 terminates TLS in front of `KFM_LADDER_LISTEN`; `serve` stops cleanly on SIGTERM.
@@ -66,7 +75,11 @@ holds no portal secret; `serve` the set marked for it.
 | `KFM_LADDER_S3_SECRET_KEY` | serve, workers | yes | | |
 | `KFM_LADDER_S3_REGION` | serve, workers | yes | `auto` (R2) | |
 | `KFM_LADDER_ENGINE_TAG` | serve, workers | yes | `v0.5.1` | The engine release the season runs (`vX.Y.Z`); the image sets it from its build. |
-| `KFM_LADDER_ARENA` | workers | worker build | `/opt/kfm/engine/kfm_arena` | The `kfm_arena` binary of `KFM_LADDER_ENGINE_TAG`: validation's smoke match (and step 4's matches). The image sets it. |
+| `KFM_LADDER_ARENA` | workers | yes | `/opt/kfm/engine/kfm_arena` | The `kfm_arena` binary of `KFM_LADDER_ENGINE_TAG`: validation's smoke match and the ranked matches. The image sets it. |
+| `KFM_LADDER_ROUND_SECONDS` | serve | no | `300` (default) | A scheduler round is due when the current season's last round is this old (1 s to 7 days). |
+| `KFM_LADDER_ROUND_OPPONENTS` | serve | no | `3` (default) | k: the most pairs a team is in per round (1 to 16). |
+| `KFM_LADDER_VIEWER_URL` | serve | no | `https://kfm.minip8.com` (default) | The engine page's origin: a match's `viewer_url` is `<this>/<tag>/?replay=<url>`. |
+| `KFM_LADDER_MATCH_TICKS` | worker match | no | `36000` (default) | The tick cap of each ranked game (1 to 216000); a capped game is a draw. |
 | `KFM_BUILD_IMAGE` | worker build | yes | `ghcr.io/minip8/kfm-bot-build:v0.1.0` | The bot build image each build runs in. |
 | `KFM_LADDER_BUILD_DIR` | worker build | yes | `/var/lib/kfm-ladder/build` | An absolute directory at the same path on the host and in the worker's container, under which each job makes `job-<id>/src` and `job-<id>/out` for the sibling `docker run` (removed after the job). |
 | `SENTRY_DSN` | all | no | | Enables Sentry: error events, with info and warnings as breadcrumbs. |
@@ -150,6 +163,44 @@ Under runc a submission goes from `queued` to `ready` in a few seconds (the star
 about 2 s from upload to ready on a laptop); `docker ps` shows its `kfm-build-<job>` container
 while it builds.
 
+## Seasons, the scheduler and the match worker
+
+Nothing is scheduled outside a season (`docs/ladder-api.md` §10). Make one that holds now, with
+`DATABASE_URL` set:
+
+```sh
+cargo run -- season create dev --start 2026-11-01T00:00:00Z --end 2027-01-01T00:00:00Z
+cargo run -- season list
+```
+
+`serve` runs the scheduler: every `KFM_LADDER_ROUND_SECONDS` it pairs the teams with an active
+`ready` submission (Swiss-style, up to `KFM_LADDER_ROUND_OPPONENTS` neighbours by rating each)
+and queues one `match` job per pair. Of several `serve` instances only the one holding the
+Postgres advisory lock schedules (the log says `holding the lock; this instance schedules`, the
+others `another instance holds the lock; idle`). For a quick local loop set
+`KFM_LADDER_ROUND_SECONDS=10`.
+
+`kfm-ladder worker match` claims the jobs and plays each pair with `kfm_arena` from both sides
+(`--matches 2 --rotate`, each module in all five slots of its team), then records two games,
+their replays (`replays/<match>.kfmr`) and the Glicko-2 ratings. It needs the database, the
+object store and `KFM_LADDER_ARENA`, nothing else (no Docker: `kfm_arena` is the sandbox).
+Natively from `service/`, with the stores of "The build worker" up:
+
+```sh
+export DATABASE_URL=postgres://kfm:kfm@127.0.0.1:5432/kfm
+export KFM_LADDER_S3_ENDPOINT=http://127.0.0.1:9000 KFM_LADDER_S3_BUCKET=kfm-ladder
+export KFM_LADDER_S3_ACCESS_KEY=kfm-dev KFM_LADDER_S3_SECRET_KEY=kfm-dev-secret KFM_LADDER_S3_REGION=us-east-1
+export KFM_LADDER_ENGINE_TAG=v0.5.1 KFM_LADDER_ARENA=$PWD/../.kfm/kfm_arena
+cargo run -- worker match
+```
+
+Each job works in `$TMPDIR/kfm-ladder-match/job-<id>` (removed afterwards; the match unit's
+`/tmp` tmpfs holds it). A 5v5 contest pair (two games) of the example bots that end their
+games takes about 0.3 s of `kfm_arena` on a laptop (v0.5.1); two games the 36000-tick cap ends
+(`chaser` against itself) take about 5 s, so one worker plays hundreds to thousands of pairs an
+hour, and a round of n teams is at most n·k/2 jobs. Then `GET /ladder`, `GET /matches?team=<id>` and `GET /matches/<id>`
+(or the same paths in a browser) show the results.
+
 ## Registering the OAuth apps
 
 **GitHub.** Settings > Developer settings > OAuth Apps > New OAuth App (under the organisation
@@ -202,6 +253,10 @@ runs the real sandbox: it also needs Docker with the image `KFM_LADDER_TEST_BUIL
 `../.kfm/kfm_arena`), and says which is missing when it skips. The module walker's example test
 (`src/wasm.rs`) checks the modules in `KFM_LADDER_TEST_EXAMPLES` (default `../out/local`, where
 `tools/build.sh examples/<name> out/local/<name>.wasm` puts them) when that directory exists.
+`tests/match_worker.rs` plays real ranked pairs: it needs the store, `kfm_arena` and the
+`starter.wasm` and `chaser.wasm` of that directory (the trapping module of its fault test is
+inlined), and says which is missing when it skips. The scheduler, seasons and ladder tests need
+Postgres only.
 
 The `service` job of `.github/workflows/ci.yml` runs the same three commands against a
 `postgres:17` service container and a MinIO started in a step, with the bot build image built
