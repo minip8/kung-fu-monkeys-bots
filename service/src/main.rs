@@ -10,7 +10,7 @@ use kfm_ladder::builder::{BuildSettings, BuildWorker};
 use kfm_ladder::config::{database_url_from, Config, WorkerConfig};
 use kfm_ladder::store::Store;
 use kfm_ladder::worker;
-use kfm_ladder::{db, seasons, AppState};
+use kfm_ladder::{db, scheduler, seasons, AppState};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -241,8 +241,29 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     db::migrate(&pool).await?;
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     tracing::info!(listen = %listener.local_addr()?, public_url = %config.public_url, "kfm-ladder listening");
+    // One signal stops both the HTTP server and the scheduler.
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = stop.send(true);
+    });
+    let settings = scheduler::SchedulerSettings::new(
+        Duration::from_secs(config.round_seconds),
+        config.round_opponents,
+    );
+    let scheduler = tokio::spawn(scheduler::run(pool.clone(), settings, stopped.clone()));
     let state = AppState::new(pool, config);
-    kfm_ladder::serve(state, listener, shutdown_signal()).await?;
+    let mut http_stop = stopped;
+    let result = kfm_ladder::serve(state, listener, async move {
+        while !*http_stop.borrow() {
+            if http_stop.changed().await.is_err() {
+                break;
+            }
+        }
+    })
+    .await;
+    let _ = scheduler.await;
+    result?;
     Ok(())
 }
 

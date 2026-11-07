@@ -22,6 +22,7 @@ pub mod manifest;
 pub mod oauth;
 pub mod portal;
 pub mod retention;
+pub mod scheduler;
 pub mod seasons;
 pub mod store;
 pub mod submissions;

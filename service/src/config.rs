@@ -14,6 +14,11 @@ pub const DEFAULT_GITHUB_AUTH_URL: &str = "https://github.com/login/oauth/author
 pub const DEFAULT_GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 pub const DEFAULT_GITHUB_API_URL: &str = "https://api.github.com";
 pub const DEFAULT_GOOGLE_ISSUER: &str = "https://accounts.google.com";
+/// The engine's page: `<viewer>/<tag>/?replay=<url>` opens a replay in the
+/// client of the match's release (architecture v0.59).
+pub const DEFAULT_VIEWER_URL: &str = "https://kfm.minip8.com";
+/// The most opponents a team may be given per round.
+pub const MAX_OPPONENTS: u64 = 16;
 
 /// A configuration error: the variable and what is wrong with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +76,15 @@ pub struct Config {
     pub engine_tag: String,
     /// The `kfm_arena` binary (workers, 3b); optional for `serve`.
     pub arena: Option<PathBuf>,
+    /// `KFM_LADDER_ROUND_SECONDS`: a scheduler round is due when the last is
+    /// this old (default 300).
+    pub round_seconds: u64,
+    /// `KFM_LADDER_ROUND_OPPONENTS`: the most pairs a team is in per round
+    /// (default 3).
+    pub round_opponents: usize,
+    /// `KFM_LADDER_VIEWER_URL`: the origin of the engine's page, whose
+    /// `/<tag>/?replay=<url>` plays a replay (default https://kfm.minip8.com).
+    pub viewer_url: String,
     pub sentry_dsn: Option<String>,
 }
 
@@ -153,6 +167,26 @@ impl Config {
 
         let s3 = s3_from(&get)?;
         let engine_tag = engine_tag_from(&get)?;
+        let round_seconds = number_from(
+            &get,
+            "KFM_LADDER_ROUND_SECONDS",
+            crate::scheduler::DEFAULT_ROUND_SECONDS,
+            1..=7 * 24 * 3600,
+        )?;
+        let round_opponents = number_from(
+            &get,
+            "KFM_LADDER_ROUND_OPPONENTS",
+            crate::scheduler::DEFAULT_OPPONENTS as u64,
+            1..=MAX_OPPONENTS,
+        )? as usize;
+        let viewer = optional_url("KFM_LADDER_VIEWER_URL", DEFAULT_VIEWER_URL)?;
+        if viewer.query().is_some() || viewer.fragment().is_some() {
+            return Err(ConfigError {
+                variable: "KFM_LADDER_VIEWER_URL",
+                problem: "must be an origin or a base path, without a query".to_owned(),
+            });
+        }
+        let viewer_url = viewer.as_str().trim_end_matches('/').to_owned();
 
         Ok(Config {
             database_url,
@@ -168,6 +202,9 @@ impl Config {
             s3,
             engine_tag,
             arena: get("KFM_LADDER_ARENA").map(PathBuf::from),
+            round_seconds,
+            round_opponents,
+            viewer_url,
             sentry_dsn: get("SENTRY_DSN"),
         })
     }
@@ -190,6 +227,9 @@ impl fmt::Debug for Config {
             .field("s3_region", &self.s3.region)
             .field("engine_tag", &self.engine_tag)
             .field("arena", &self.arena)
+            .field("round_seconds", &self.round_seconds)
+            .field("round_opponents", &self.round_opponents)
+            .field("viewer_url", &self.viewer_url)
             .field("sentry", &self.sentry_dsn.is_some())
             .finish_non_exhaustive()
     }
@@ -258,6 +298,29 @@ fn s3_from(get: &impl Fn(&str) -> Option<String>) -> Result<S3Config, ConfigErro
         secret_key: required_from(get, "KFM_LADDER_S3_SECRET_KEY")?,
         region: required_from(get, "KFM_LADDER_S3_REGION")?,
     })
+}
+
+/// An optional whole number in `range`, `default` when unset.
+fn number_from(
+    get: &impl Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: u64,
+    range: std::ops::RangeInclusive<u64>,
+) -> Result<u64, ConfigError> {
+    let Some(text) = get(name) else {
+        return Ok(default);
+    };
+    match text.trim().parse::<u64>() {
+        Ok(n) if range.contains(&n) => Ok(n),
+        _ => Err(ConfigError {
+            variable: name,
+            problem: format!(
+                "{text:?} is not a whole number from {} to {}",
+                range.start(),
+                range.end()
+            ),
+        }),
+    }
 }
 
 fn engine_tag_from(get: &impl Fn(&str) -> Option<String>) -> Result<String, ConfigError> {
@@ -372,6 +435,9 @@ mod tests {
         assert_eq!(config.github_api_url, "https://api.github.com");
         assert_eq!(config.google_issuer, DEFAULT_GOOGLE_ISSUER);
         assert!(config.arena.is_none());
+        assert_eq!(config.round_seconds, 300);
+        assert_eq!(config.round_opponents, 3);
+        assert_eq!(config.viewer_url, "https://kfm.minip8.com");
         assert!(config.sentry_dsn.is_none());
         assert!(!format!("{config:?}").contains("gh-secret"));
     }
@@ -434,6 +500,18 @@ mod tests {
     }
 
     #[test]
+    fn the_ladder_settings_are_read() {
+        let mut map = base();
+        map.insert("KFM_LADDER_ROUND_SECONDS", "60".to_owned());
+        map.insert("KFM_LADDER_ROUND_OPPONENTS", "5".to_owned());
+        map.insert("KFM_LADDER_VIEWER_URL", "http://127.0.0.1:8000/".to_owned());
+        let config = load(&map).unwrap();
+        assert_eq!(config.round_seconds, 60);
+        assert_eq!(config.round_opponents, 5);
+        assert_eq!(config.viewer_url, "http://127.0.0.1:8000");
+    }
+
+    #[test]
     fn migrate_needs_only_the_database() {
         let url = database_url_from(|k| (k == "DATABASE_URL").then(|| "postgres://x/y".to_owned()));
         assert_eq!(url.unwrap(), "postgres://x/y");
@@ -451,6 +529,12 @@ mod tests {
             ("KFM_LADDER_ENGINE_TAG", "v0.5"),
             ("DATABASE_URL", "mysql://x"),
             ("KFM_LADDER_GOOGLE_ISSUER", "ftp://x"),
+            ("KFM_LADDER_ROUND_SECONDS", "0"),
+            ("KFM_LADDER_ROUND_SECONDS", "five"),
+            ("KFM_LADDER_ROUND_OPPONENTS", "17"),
+            ("KFM_LADDER_ROUND_OPPONENTS", "-1"),
+            ("KFM_LADDER_VIEWER_URL", "kfm.minip8.com"),
+            ("KFM_LADDER_VIEWER_URL", "https://kfm.minip8.com/?x=1"),
         ] {
             let mut map = base();
             map.insert(name, value.to_owned());
