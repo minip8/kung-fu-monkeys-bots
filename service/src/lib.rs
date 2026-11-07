@@ -19,6 +19,7 @@ pub mod extract;
 pub mod glicko;
 pub mod jobs;
 pub mod manifest;
+pub mod match_worker;
 pub mod oauth;
 pub mod portal;
 pub mod retention;

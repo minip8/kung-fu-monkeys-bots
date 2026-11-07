@@ -392,12 +392,32 @@ async fn the_loop_settles_what_the_sweeper_gives_up(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn the_match_role_fails_its_jobs_until_step_4(pool: PgPool) {
+async fn the_match_role_fails_a_job_that_names_no_match_at_once(pool: PgPool) {
     let id = add(&pool, Kind::Match, json!({})).await;
     let (tx, rx) = tokio::sync::watch::channel(false);
+    // Nothing is fetched or run for a payload that is not a match.
+    let store = kfm_ladder::Store::new(&kfm_ladder::config::S3Config {
+        endpoint: "http://127.0.0.1:9".parse().unwrap(),
+        bucket: "kfm".to_owned(),
+        access_key: "a".to_owned(),
+        secret_key: "s".to_owned(),
+        region: "auto".to_owned(),
+    })
+    .unwrap();
+    let handler = kfm_ladder::match_worker::MatchWorker::new(
+        pool.clone(),
+        store,
+        kfm_ladder::match_worker::MatchSettings {
+            arena: "/nonexistent/kfm_arena".into(),
+            engine_tag: "v0.5.1".to_owned(),
+            ticks: 600,
+            work_dir: std::env::temp_dir(),
+            timeout: Duration::from_secs(5),
+        },
+    );
     let task = tokio::spawn(worker::run(
         pool.clone(),
-        worker::MatchStub,
+        handler,
         "match".to_owned(),
         fast(),
         rx,
@@ -411,5 +431,10 @@ async fn the_match_role_fails_its_jobs_until_step_4(pool: PgPool) {
     task.await.unwrap();
     let (_, attempts, _, error) = job_state(&pool, id).await;
     assert_eq!(attempts, 1, "a permanent failure is not retried");
-    assert_eq!(error.as_deref(), Some("not implemented (M7 step 4)"));
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("the payload is not a match")),
+        "{error:?}"
+    );
 }

@@ -17,6 +17,10 @@ pub const DEFAULT_GOOGLE_ISSUER: &str = "https://accounts.google.com";
 /// The engine's page: `<viewer>/<tag>/?replay=<url>` opens a replay in the
 /// client of the match's release (architecture v0.59).
 pub const DEFAULT_VIEWER_URL: &str = "https://kfm.minip8.com";
+/// A ranked game's tick cap: ten minutes at 60 Hz.
+pub const DEFAULT_MATCH_TICKS: u32 = 36_000;
+/// The highest cap accepted: an hour of play.
+pub const MAX_MATCH_TICKS: u32 = 216_000;
 /// The most opponents a team may be given per round.
 pub const MAX_OPPONENTS: u64 = 16;
 
@@ -252,6 +256,9 @@ pub struct WorkerConfig {
     /// the worker's container, under which a build's source and output
     /// directories are made for the sibling `docker run`.
     pub build_dir: Option<PathBuf>,
+    /// `KFM_LADDER_MATCH_TICKS`: the tick cap of each ranked game (default
+    /// 36000, ten minutes of play).
+    pub match_ticks: u32,
     pub sentry_dsn: Option<String>,
 }
 
@@ -271,6 +278,12 @@ impl WorkerConfig {
             arena: get("KFM_LADDER_ARENA").map(PathBuf::from),
             build_image: get("KFM_BUILD_IMAGE"),
             build_dir: get("KFM_LADDER_BUILD_DIR").map(PathBuf::from),
+            match_ticks: number_from(
+                &get,
+                "KFM_LADDER_MATCH_TICKS",
+                u64::from(DEFAULT_MATCH_TICKS),
+                1..=u64::from(MAX_MATCH_TICKS),
+            )? as u32,
             sentry_dsn: get("SENTRY_DSN"),
         })
     }
@@ -343,6 +356,7 @@ impl fmt::Debug for WorkerConfig {
             .field("arena", &self.arena)
             .field("build_image", &self.build_image)
             .field("build_dir", &self.build_dir)
+            .field("match_ticks", &self.match_ticks)
             .field("sentry", &self.sentry_dsn.is_some())
             .finish_non_exhaustive()
     }
@@ -477,6 +491,23 @@ mod tests {
         );
         let worker = WorkerConfig::from_lookup(|k| map.get(k).cloned()).unwrap();
         assert_eq!(worker.engine_tag, "v0.5.1");
+        assert_eq!(worker.match_ticks, DEFAULT_MATCH_TICKS);
+        let mut ticks = map.clone();
+        ticks.insert("KFM_LADDER_MATCH_TICKS", "600".to_owned());
+        assert_eq!(
+            WorkerConfig::from_lookup(|k| ticks.get(k).cloned())
+                .unwrap()
+                .match_ticks,
+            600
+        );
+        ticks.insert("KFM_LADDER_MATCH_TICKS", "0".to_owned());
+        assert_eq!(
+            WorkerConfig::from_lookup(|k| ticks.get(k).cloned())
+                .err()
+                .unwrap()
+                .variable,
+            "KFM_LADDER_MATCH_TICKS"
+        );
         assert_eq!(
             worker.build_image.as_deref(),
             Some("ghcr.io/minip8/kfm-bot-build:v0.1.0")

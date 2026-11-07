@@ -822,6 +822,7 @@ mod tests {
             arena: Some("/opt/kfm/engine/kfm_arena".into()),
             build_image: Some("kfm-bot-build:dev".to_owned()),
             build_dir: Some("/var/lib/kfm-ladder/build".into()),
+            match_ticks: crate::config::DEFAULT_MATCH_TICKS,
             sentry_dsn: None,
         };
         assert!(BuildSettings::from_config(&base).is_ok());

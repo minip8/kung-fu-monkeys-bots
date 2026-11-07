@@ -8,6 +8,7 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use kfm_ladder::builder::{BuildSettings, BuildWorker};
 use kfm_ladder::config::{database_url_from, Config, WorkerConfig};
+use kfm_ladder::match_worker::{MatchSettings, MatchWorker};
 use kfm_ladder::store::Store;
 use kfm_ladder::worker;
 use kfm_ladder::{db, scheduler, seasons, AppState};
@@ -75,8 +76,8 @@ enum WorkerRole {
     /// Claim build and validate jobs: a submission's source into a module in
     /// the sandbox, then the module's checks and its smoke match.
     Build,
-    /// Claim match jobs: one kfm_arena run, its result and replay (step 4;
-    /// until then each match job fails as not implemented).
+    /// Claim match jobs: one kfm_arena run of a pair from both sides, its
+    /// two games recorded with their replays and the ratings updated.
     Match,
 }
 
@@ -94,20 +95,21 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-            let build = match role {
-                WorkerRole::Build => match BuildSettings::from_config(&config) {
-                    Ok(settings) => Some(settings),
-                    Err(err) => {
-                        eprintln!("kfm-ladder: {err}");
-                        return ExitCode::from(2);
-                    }
-                },
-                WorkerRole::Match => None,
+            let settings = match role {
+                WorkerRole::Build => BuildSettings::from_config(&config).map(Role::Build),
+                WorkerRole::Match => MatchSettings::from_config(&config).map(Role::Match),
+            };
+            let settings = match settings {
+                Ok(settings) => settings,
+                Err(err) => {
+                    eprintln!("kfm-ladder: {err}");
+                    return ExitCode::from(2);
+                }
             };
             #[cfg(feature = "sentry")]
             let _sentry = init_sentry(config.sentry_dsn.clone());
             init_logging();
-            run(worker(config, build))
+            run(worker(config, settings))
         }
         Command::Season { action } => {
             let url = match database_url_from(|k| std::env::var(k).ok()) {
@@ -267,21 +269,28 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     Ok(())
 }
 
-async fn worker(config: WorkerConfig, build: Option<BuildSettings>) -> Result<(), BoxError> {
+/// A worker role with its settings.
+enum Role {
+    Build(BuildSettings),
+    Match(MatchSettings),
+}
+
+async fn worker(config: WorkerConfig, role: Role) -> Result<(), BoxError> {
     tracing::info!(?config, "configuration");
     let pool = db::connect(&config.database_url, DB_PATIENCE).await?;
     let shutdown = worker::shutdown_on_signal();
     let timing = worker::Timing::default();
-    match build {
-        Some(settings) => {
-            let store = Store::new(&config.s3)?;
+    let store = Store::new(&config.s3)?;
+    match role {
+        Role::Build(settings) => {
             let handler = BuildWorker::new(pool.clone(), store, settings);
             let name = worker::worker_name("build");
             worker::run(pool, handler, name, timing, shutdown).await;
         }
-        None => {
+        Role::Match(settings) => {
+            let handler = MatchWorker::new(pool.clone(), store, settings);
             let name = worker::worker_name("match");
-            worker::run(pool, worker::MatchStub, name, timing, shutdown).await;
+            worker::run(pool, handler, name, timing, shutdown).await;
         }
     }
     Ok(())

@@ -226,22 +226,6 @@ pub async fn run<H: Handler>(
     tracing::info!(%worker, "worker stopped");
 }
 
-/// The match role until step 4: every `match` job fails at once, logged.
-pub struct MatchStub;
-
-impl Handler for MatchStub {
-    fn kinds(&self) -> &[Kind] {
-        &[Kind::Match]
-    }
-
-    async fn run(&self, job: &Job) -> Result<(), JobError> {
-        tracing::warn!(job = %job.id, "match jobs are not implemented (M7 step 4)");
-        Err(JobError::Fail("not implemented (M7 step 4)".to_owned()))
-    }
-
-    async fn gave_up(&self, _kind: &str, _payload: &serde_json::Value, _error: &str) {}
-}
-
 /// A watch that turns true on SIGTERM or Ctrl-C.
 pub fn shutdown_on_signal() -> watch::Receiver<bool> {
     let (tx, rx) = watch::channel(false);

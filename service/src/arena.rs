@@ -137,17 +137,32 @@ pub async fn smoke(
         result.as_os_str(),
         "--quiet".as_ref(),
     ];
+    run(arena, &args, None, timeout).await
+}
+
+/// Runs `arena` with `args` (in `cwd` when given), capturing its output.
+/// `Err` when it could not start or took longer than `timeout` (then it is
+/// killed, with its process group).
+pub async fn run(
+    arena: &Path,
+    args: &[&std::ffi::OsStr],
+    cwd: Option<&Path>,
+    timeout: Duration,
+) -> Result<Run, String> {
     let command = std::iter::once(arena.as_os_str())
         .chain(args.iter().copied())
         .map(|a| a.to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(" ");
     let mut cmd = tokio::process::Command::new(arena);
-    cmd.args(&args)
+    cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
     #[cfg(unix)]
     cmd.process_group(0);
     let child = cmd
