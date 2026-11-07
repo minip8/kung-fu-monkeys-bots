@@ -1,0 +1,36 @@
+# The kfm command line tool as Python wheels (cli/README.md "Install"): maturin packs the Rust
+# binary itself (bindings = "bin"), so `uv tool install kfm-cli`, `uvx --from kfm-cli kfm` and
+# `pipx install kfm-cli` put `kfm` on PATH with no Python code at all. The PyPI name is kfm-cli
+# because `kfm` is taken on PyPI (an unrelated microscopy package); the command is `kfm`.
+# The version is Cargo.toml's. Wheels are built from a checkout of the repository (the binary
+# embeds ../sdk and reads ../engine.lock at build time), so the release publishes wheels only,
+# no sdist (.github/workflows/release.yml, job cli).
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "kfm-cli"
+description = "kfm: the Kung Fu Monkeys bot ladder from the command line (log in, build, test, submit, replays)"
+readme = "README.md"
+requires-python = ">=3.8"
+dynamic = ["version"]
+keywords = ["kung-fu-monkeys", "bots", "webassembly", "ladder", "cli"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Rust",
+    "Topic :: Games/Entertainment",
+]
+
+[project.urls]
+Homepage = "https://github.com/minip8/kung-fu-monkeys-bots"
+Documentation = "https://github.com/minip8/kung-fu-monkeys-bots/blob/main/cli/README.md"
+Source = "https://github.com/minip8/kung-fu-monkeys-bots/tree/main/cli"
+
+[tool.maturin]
+bindings = "bin"
+strip = true
