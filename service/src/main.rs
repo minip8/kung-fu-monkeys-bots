@@ -6,7 +6,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use kfm_ladder::config::{database_url_from, Config};
+use kfm_ladder::config::{database_url_from, Config, WorkerConfig};
+use kfm_ladder::worker;
 use kfm_ladder::{db, AppState};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -29,9 +30,10 @@ enum Command {
     Serve,
     /// Apply pending migrations and exit (needs DATABASE_URL only).
     Migrate,
-    /// Run a worker (not implemented yet: step 3b). A worker reads only its
-    /// own variables (`WorkerConfig`): no session key, OAuth app, public URL
-    /// or listen address.
+    /// Run a worker until SIGTERM (the job in hand finishes first). A worker
+    /// reads only its own variables (`WorkerConfig`): no session key, OAuth
+    /// app, public URL or listen address. It never migrates: `migrate` (or
+    /// `serve`) brings the schema first.
     Worker {
         #[command(subcommand)]
         role: WorkerRole,
@@ -40,9 +42,11 @@ enum Command {
 
 #[derive(Subcommand, Debug, Clone, Copy)]
 enum WorkerRole {
-    /// Claim build jobs: a submission's source into a module, in the sandbox.
+    /// Claim build and validate jobs: a submission's source into a module in
+    /// the sandbox, then the module's checks and its smoke match.
     Build,
-    /// Claim match jobs: one kfm_arena run, its result and replay.
+    /// Claim match jobs: one kfm_arena run, its result and replay (step 4;
+    /// until then each match job fails as not implemented).
     Match,
 }
 
@@ -53,12 +57,21 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Worker { role } => {
-            let name = match role {
-                WorkerRole::Build => "build",
-                WorkerRole::Match => "match",
+            let config = match WorkerConfig::from_env() {
+                Ok(config) => config,
+                Err(err) => {
+                    eprintln!("kfm-ladder: {err}");
+                    return ExitCode::from(2);
+                }
             };
-            eprintln!("kfm-ladder: worker {name}: not implemented (M7 step 3b)");
-            ExitCode::from(2)
+            if let WorkerRole::Build = role {
+                eprintln!("kfm-ladder: worker build: not implemented yet");
+                return ExitCode::from(2);
+            }
+            #[cfg(feature = "sentry")]
+            let _sentry = init_sentry(config.sentry_dsn.clone());
+            init_logging();
+            run(worker(config))
         }
         Command::Migrate => {
             let url = match database_url_from(|k| std::env::var(k).ok()) {
@@ -154,6 +167,22 @@ async fn serve(config: Config) -> Result<(), BoxError> {
     tracing::info!(listen = %listener.local_addr()?, public_url = %config.public_url, "kfm-ladder listening");
     let state = AppState::new(pool, config);
     kfm_ladder::serve(state, listener, shutdown_signal()).await?;
+    Ok(())
+}
+
+async fn worker(config: WorkerConfig) -> Result<(), BoxError> {
+    tracing::info!(?config, "configuration");
+    let pool = db::connect(&config.database_url, DB_PATIENCE).await?;
+    let shutdown = worker::shutdown_on_signal();
+    let name = worker::worker_name("match");
+    worker::run(
+        pool,
+        worker::MatchStub,
+        name,
+        worker::Timing::default(),
+        shutdown,
+    )
+    .await;
     Ok(())
 }
 

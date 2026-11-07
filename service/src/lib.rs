@@ -22,6 +22,7 @@ pub mod submissions;
 pub mod teams;
 pub mod tokens;
 pub mod users;
+pub mod worker;
 
 use std::future::Future;
 use std::sync::Arc;
