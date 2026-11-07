@@ -1,0 +1,12 @@
+# One dump of the ladder database to the object store (postgres-backup.sh dump), run nightly
+# by kfm-postgres-backup.timer and by hand with `systemctl start kfm-postgres-backup`.
+[Unit]
+Description=Kung Fu Monkeys ladder database dump to the object store
+Documentation=https://github.com/minip8/kung-fu-monkeys-bots/blob/main/deploy/README.md
+Requires=kfm-postgres.service
+After=kfm-postgres.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/kfm-ladder-deploy/vm/postgres-backup.sh dump
+TimeoutStartSec=1800

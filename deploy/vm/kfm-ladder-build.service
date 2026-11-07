@@ -1,0 +1,47 @@
+# The build worker, `kfm-ladder worker build` (architecture §11 "M7 step 3 design (v0.63)",
+# §8 "The build sandbox"), alone on kfm-build-1. It claims `build` and `validate` jobs, unpacks
+# each submission into KFM_LADDER_BUILD_DIR and starts one throwaway sibling container of
+# KFM_BUILD_IMAGE per build through the host's Docker socket, with the §8 flags
+# (tools/build_in_sandbox.sh). Docker's default runtime on this VM is gVisor's runsc
+# (install-gvisor.sh), so every build container runs under gVisor whatever flags the worker
+# passes; the worker itself runs under runc (`--runtime runc`), because it needs the socket.
+#
+# The socket is root on this VM (whoever can start containers can mount /), so the worker
+# runs as root in its container: an unprivileged uid with the socket's group would protect
+# nothing more. That is why the build VM holds nothing else: no inbound ports, no OAuth
+# secrets, no session key, only the database URL and the object store keys
+# (deploy/README.md "What gVisor protects against").
+#
+# The build directory is bind-mounted at the same path inside and outside the container: the
+# worker names its subdirectories in the sandbox's -v SRC:/src:ro -v OUT:/out, and the daemon
+# resolves those paths on the host. TMPDIR points there too.
+[Unit]
+Description=Kung Fu Monkeys ladder build worker
+Documentation=https://github.com/minip8/kung-fu-monkeys-bots/blob/main/deploy/README.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+EnvironmentFile=/etc/kfm/ladder.env
+ExecStartPre=-/usr/bin/docker rm -f kfm-ladder-build
+ExecStart=/usr/bin/docker run --rm --name kfm-ladder-build --network host --runtime runc \
+    --log-opt max-size=10m --log-opt max-file=3 \
+    --user 0 --read-only --tmpfs /tmp --security-opt no-new-privileges \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v /var/lib/kfm-ladder/build:/var/lib/kfm-ladder/build \
+    -e KFM_LADDER_BUILD_DIR=/var/lib/kfm-ladder/build -e TMPDIR=/var/lib/kfm-ladder/build \
+    -e KFM_BUILD_IMAGE=${KFM_IMAGE_REPO}/kfm-bot-build:${KFM_IMAGE_TAG} \
+    -e DATABASE_URL \
+    -e KFM_LADDER_S3_ENDPOINT -e KFM_LADDER_S3_BUCKET -e KFM_LADDER_S3_ACCESS_KEY \
+    -e KFM_LADDER_S3_SECRET_KEY -e KFM_LADDER_S3_REGION -e SENTRY_DSN \
+    ${KFM_IMAGE_REPO}/kfm-ladder:${KFM_IMAGE_TAG} worker build
+ExecStop=/usr/bin/docker stop -t 150 kfm-ladder-build
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target
