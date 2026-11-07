@@ -45,6 +45,8 @@ built as C.
 | `tools/build.sh` | The build recipe: `tools/build.sh <bot dir> <out.wasm>`. |
 | `tools/fetch_kfm_arena.sh` | Fetches the engine's released headless `kfm_arena` for the pinned engine into `.kfm/`. |
 | `docs/build.md` | The recipe in full, the build sandbox, the engine pin and CI. |
+| `service/` | The ladder service, `kfm-ladder` (Rust): accounts, tokens, teams and, to come, submissions, matches and ratings. `service/README.md` says how to run and test it. |
+| `docs/ladder-api.md` | The ladder's HTTP API, normative: every route, its auth, its JSON and its errors. |
 
 ## Quick start
 
