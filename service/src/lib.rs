@@ -13,6 +13,7 @@ pub mod db;
 pub mod error;
 pub mod extract;
 pub mod oauth;
+pub mod teams;
 pub mod tokens;
 pub mod users;
 
@@ -23,7 +24,7 @@ use std::time::Duration;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use sqlx::PgPool;
 use tokio::net::TcpListener;
@@ -64,6 +65,15 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/me", get(users::me))
+        .route("/tokens", get(tokens::list).post(tokens::create))
+        .route("/tokens/{id}", delete(tokens::revoke))
+        .route("/teams", get(teams::list_mine).post(teams::create))
+        .route("/teams/{id}", get(teams::show))
+        .route("/teams/{id}/members", post(teams::add_member_route))
+        .route(
+            "/teams/{id}/members/{user}",
+            delete(teams::remove_member_route),
+        )
         .merge(oauth::routes())
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
