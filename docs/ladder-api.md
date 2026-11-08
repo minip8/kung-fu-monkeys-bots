@@ -717,10 +717,11 @@ in one update. A delete that fails keeps its key, and the next sweep tries again
 replay may outlive its 24 hours by a sweep or more, never the other way. Download a replay you
 want to keep (`kfm replay get`, or the link) within the day.
 
-The viewer itself is the browser client's replay-by-URL feature, M7 step 6: until it lands
-the link opens the release's page without playing the replay. The client fetches the replay
-from the object store's presigned URL, so the bucket must allow that origin's GET (CORS) by
-then.
+The viewer itself is the browser client's replay-by-URL feature (the engine's M7 step 6,
+architecture v0.68): the page of an engine release after v0.5.1 plays the replay. v0.5.1's page
+predates the viewer, so a link for a game played under v0.5.1 opens a page whose client stops
+on the unknown `--replay` argument. The client fetches the replay from the object store's
+presigned URL, so the bucket must allow that origin's GET (CORS, `deploy/README.md`).
 
 ## 11. Versioning
 

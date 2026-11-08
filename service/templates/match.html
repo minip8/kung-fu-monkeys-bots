@@ -18,7 +18,7 @@
   <h2>Replay</h2>
   {% if let Some(url) = replay_url %}
   <p><a href="{{ url }}">Download the replay (.kfmr)</a> (the link is valid for an hour).
-  {% if let Some(viewer) = viewer_url %}<a href="{{ viewer }}">Watch it in the {{ engine_tag }} client</a> (replay viewing arrives with the client's replay viewer).{% endif %}</p>
+  {% if let Some(viewer) = viewer_url %}<a href="{{ viewer }}">Watch it in the {{ engine_tag }} client</a> (the replay plays in engine releases after v0.5.1, whose page carries the replay viewer).{% endif %}</p>
   <p class="muted">Re-run it bit for bit with the {{ engine_tag }} release's kfm_arena: seed {{ seed }}, {{ ticks }} ticks, content {{ content_hash }}, build {{ build_hash }}.</p>
   {% else %}<p class="muted">No replay is stored.</p>{% endif %}
 </section>
