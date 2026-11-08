@@ -76,7 +76,7 @@ holds no portal secret; `serve` the set marked for it.
 | `KFM_LADDER_S3_ACCESS_KEY` | serve, workers | yes | | |
 | `KFM_LADDER_S3_SECRET_KEY` | serve, workers | yes | | |
 | `KFM_LADDER_S3_REGION` | serve, workers | yes | `auto` (R2) | |
-| `KFM_LADDER_ENGINE_TAG` | serve, workers | yes | `v0.5.1` | The engine release the season runs (`vX.Y.Z`); the image sets it from its build. |
+| `KFM_LADDER_ENGINE_TAG` | serve, workers | yes | `v0.6.0` | The engine release the season runs (`vX.Y.Z`); the image sets it from its build. |
 | `KFM_LADDER_ARENA` | workers | yes | `/opt/kfm/engine/kfm_arena` | The `kfm_arena` binary of `KFM_LADDER_ENGINE_TAG`: validation's smoke match and the ranked matches. The image sets it. |
 | `KFM_LADDER_ROUND_SECONDS` | serve | no | `1800` (default) | A scheduler round is due when the current season's last round is this old (1 s to 7 days). Every game writes a replay to the store: a round every 5 minutes with 20 teams writes 17 k replays a day, hence half an hour. |
 | `KFM_LADDER_ROUND_OPPONENTS` | serve | no | `3` (default) | k: the most pairs a team is in per round (1 to 16). |
@@ -106,7 +106,7 @@ export KFM_LADDER_GITHUB_CLIENT_ID=... KFM_LADDER_GITHUB_CLIENT_SECRET=...
 export KFM_LADDER_GOOGLE_CLIENT_ID=... KFM_LADDER_GOOGLE_CLIENT_SECRET=...
 export KFM_LADDER_S3_ENDPOINT=http://127.0.0.1:9000 KFM_LADDER_S3_BUCKET=kfm-ladder
 export KFM_LADDER_S3_ACCESS_KEY=minio KFM_LADDER_S3_SECRET_KEY=minio-secret KFM_LADDER_S3_REGION=auto
-export KFM_LADDER_ENGINE_TAG=v0.5.1
+export KFM_LADDER_ENGINE_TAG=v0.6.0
 cargo run -- serve
 curl http://127.0.0.1:8090/healthz      # {"db":true,"ok":true}
 ```
@@ -147,7 +147,7 @@ its `bot-build` service builds the image `kfm-bot-build:dev` first; the host nee
 Docker and those two paths):
 
 ```sh
-export KFM_ENGINE_TAG=v0.5.1            # while engine.lock has tag= empty
+export KFM_ENGINE_TAG=v0.6.0            # while engine.lock has tag= empty
 docker compose -f deploy/docker-compose.yml up -d --build postgres minio bucket bot-build migrate
 docker compose -f deploy/docker-compose.yml up --build build-worker
 ```
@@ -160,7 +160,7 @@ run for `.kfm/kfm_arena`:
 export DATABASE_URL=postgres://kfm:kfm@127.0.0.1:5432/kfm
 export KFM_LADDER_S3_ENDPOINT=http://127.0.0.1:9000 KFM_LADDER_S3_BUCKET=kfm-ladder
 export KFM_LADDER_S3_ACCESS_KEY=kfm-dev KFM_LADDER_S3_SECRET_KEY=kfm-dev-secret KFM_LADDER_S3_REGION=us-east-1
-export KFM_LADDER_ENGINE_TAG=v0.5.1 KFM_LADDER_ARENA=$PWD/../.kfm/kfm_arena
+export KFM_LADDER_ENGINE_TAG=v0.6.0 KFM_LADDER_ARENA=$PWD/../.kfm/kfm_arena
 export KFM_BUILD_IMAGE=kfm-bot-build:dev KFM_LADDER_BUILD_DIR=/tmp/kfm-ladder-build
 mkdir -p $KFM_LADDER_BUILD_DIR && cargo run -- worker build
 ```
@@ -208,13 +208,13 @@ Natively from `service/`, with the stores of "The build worker" up:
 export DATABASE_URL=postgres://kfm:kfm@127.0.0.1:5432/kfm
 export KFM_LADDER_S3_ENDPOINT=http://127.0.0.1:9000 KFM_LADDER_S3_BUCKET=kfm-ladder
 export KFM_LADDER_S3_ACCESS_KEY=kfm-dev KFM_LADDER_S3_SECRET_KEY=kfm-dev-secret KFM_LADDER_S3_REGION=us-east-1
-export KFM_LADDER_ENGINE_TAG=v0.5.1 KFM_LADDER_ARENA=$PWD/../.kfm/kfm_arena
+export KFM_LADDER_ENGINE_TAG=v0.6.0 KFM_LADDER_ARENA=$PWD/../.kfm/kfm_arena
 cargo run -- worker match
 ```
 
 Each job works in `$TMPDIR/kfm-ladder-match/job-<id>` (removed afterwards; the match unit's
 `/tmp` tmpfs holds it). A 5v5 contest pair (two games) of the example bots that end their
-games takes about 0.3 s of `kfm_arena` on a laptop (v0.5.1); two games the 36000-tick cap ends
+games takes about 0.3 s of `kfm_arena` on a laptop (v0.6.0); two games the 36000-tick cap ends
 (`chaser` against itself) take about 5 s, so one worker plays hundreds to thousands of pairs an
 hour, and a round of n teams is at most n·k/2 jobs. Then `GET /ladder`, `GET /matches?team=<id>` and `GET /matches/<id>`
 (or the same paths in a browser) show the results.
