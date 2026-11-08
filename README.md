@@ -138,6 +138,7 @@ The service (`service/`, `docs/ladder-api.md`) has accounts (GitHub or Google si
 teams, source submissions built in the pinned build image and validated, seasons, Swiss-style
 rounds of 5v5 `contest` games played from both sides, Glicko-2 ratings, replays and a public
 board. `kfm` (`cli/`) is its command line tool: log in, build, test, submit, follow matches and
-fetch replays. Coming: the replay viewer in the browser client. `kfm test` (or `kfm_arena`
-itself) against the reference bots (`ref:easy`, `ref:medium`, `ref:hard`) is the way to
-measure a bot before it is ranked.
+fetch replays; a game's viewer link plays its replay in the browser client of the game's
+engine release, from the first release after v0.5.1 (the engine's replay viewer, architecture
+v0.68). `kfm test` (or `kfm_arena` itself) against the reference bots (`ref:easy`,
+`ref:medium`, `ref:hard`) is the way to measure a bot before it is ranked.
