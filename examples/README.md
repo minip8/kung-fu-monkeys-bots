@@ -18,21 +18,23 @@ priority order, it dash-catches an incoming banana when the perfect window allow
 banana about to hit (dashing across its line), dash-attacks an enemy in reach while it holds a
 banana, moves (closes in on and circles the nearest enemy at throwing range, or fetches a
 banana when empty-handed, keeping off the outer walls) and throws at the nearest enemy, leading
-its motion. It ignores the grid and fog fields, so it plays the contest mode poorly. It uses
+its motion. It ignores the grid, fog and zone fields, so it plays the contest mode poorly. It uses
 about 7 000 instructions a tick on average and under 30 000 at most.
 
 **starter** (`starter/bot.cpp`) is the C++ starter, over `sdk/cpp/kfm_bot.hpp`. It plays both
 the continuous arenas and the grid, including the `contest` mode under fog: it catches a
 banana with a dash when the window allows it (only the catcher's kit has a window on the
 grid), dodges the banana that would hit it soonest (predicting at most two flights a tick),
-fetches a banana when empty-handed, keeps a throwing distance from the nearest enemy and throws
+fetches a banana when empty-handed, armed in a hill mode (the contest since engine v0.7.0) walks
+to the hill and holds it, else keeps a throwing distance from the nearest enemy, and throws
 when the line is clear, walks round walls on the grid (a straight step when it is open, the
 SDK's breadth-first search when it is not), goes where an enemy was last seen or called out
 when it sees nobody, else explores, and calls out the cell of an enemy it sees in the
 reference bot's encoding, so a mixed team understands it. Measured against the engine's
 `kfm_arena` at engine commit 6230aa1: it beats `ref:medium` 8 or more times in 10 one-on-one
-and `ref:hard` about 12 in 20 on the default arena, wins most one-on-one contest matches
-against `ref:hard` and loses most 5v5 ones; `fuel_max` stays near 30 k in one-on-one matches
+and `ref:hard` about 12 in 20 on the default arena. In the contest (king of the hill on the
+grid since engine v0.7.0, measured there; `ref:hard` ignores the hill) it beats `ref:hard` 9 in
+10 one-on-one and 7 in 10 five against five; `fuel_max` stays near 30 k in one-on-one matches
 and under 65 k with ten monkeys and many bananas in the air. It is a starting point, not a
 strong bot: see "Where to go from here" in `starter/bot.cpp`'s header comment.
 

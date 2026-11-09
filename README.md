@@ -98,9 +98,17 @@ pinned engine commit instead (`docs/build.md`).
 ## The contest mode
 
 The ladder plays the engine's `contest` mode (`content/modes.toml`; architecture §8 "The ladder"
-and "Teams, fog and calls", §5.12 for the grid: read them). Today it is the squad shape of
-`grid_rounds_1t` on the `courtyard` arena (24 x 14 cells of one unit): two teams of up to five
-monkeys, one module instance each, rounds to three. Monkeys move on the grid, to one of the
+and "Teams, fog and calls", §5.12 for the grid: read them). Since engine v0.7.0 it is king of
+the hill with the squad shape of `grid_rounds_1t`, on the `courtyard_hill` arena (24 x 14 cells
+of one unit, the hill a 4 x 2 box in the middle between two pillars): two teams of up to five
+monkeys, one module instance each. A team scores a point for every 60 ticks (turns) its monkeys
+alone stand on the hill (a monkey whose centre is in the box; a contested or empty hill holds
+every team's clock); five points win, else the leading team after 3600 ticks (a tied lead is a
+draw). Eliminations score nothing, but a dead monkey respawns only after 120 ticks, and its
+bananas vanish (an empty hand grows one after 120). A bot finds the hill in the observation:
+`match.modeData` words 8-11 are zone 0's box (`KFM_ZONE_WORD`; the C++ layer's `o.hill()`), and
+word 5 is the team holding it alone plus one (`o.hillHolder()`). Before v0.7.0 the contest was
+the same squad playing rounds of elimination on `courtyard`. Monkeys move on the grid, to one of the
 eight neighbouring cells per turn at one-tick turns, a dash covering two cells; bananas fly
 freely as everywhere else, at about a cell a tick, and bounce off the walls. A monkey has 2 HP;
 one per team, the catcher, has a dash whose perfect window catches a banana, and nobody else's

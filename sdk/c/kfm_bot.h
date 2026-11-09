@@ -75,6 +75,11 @@ extern "C" {
 #define KFM_MAX_SPAWNERS 8
 #define KFM_MAX_HEARD_CALLS 16
 #define KFM_MODE_DATA_WORDS 16
+/* v0.69: match.modeData[KFM_ZONE_WORD + 4k .. +3] is the arena's zone k
+   (k < KFM_ZONES) as the closed box minX, minY, maxX, maxY (Q16.16, as
+   int32_t), all zero when the arena has no zone k. Zone 0 is the hill. */
+#define KFM_ZONE_WORD 8
+#define KFM_ZONES 2
 
 #define KFM_NO_SLOT 0xFFu        /* a slot field naming no player */
 #define KFM_NO_APPROACH 0xFFFFu  /* banana.approachTicks while self is not alive */
