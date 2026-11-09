@@ -3,9 +3,10 @@
 // the grid (a cell per turn, the contest mode). Each tick, in priority order:
 //   1. catch: dash into a banana about to arrive when the perfect window allows;
 //   2. dodge: step off the path of a banana that would hit it standing still;
-//   3. move: empty-handed, fetch a banana; armed, keep a throwing distance
-//      from the nearest enemy; with nobody in sight (fog), go where an enemy
-//      was last seen or called out, else explore;
+//   3. move: empty-handed, fetch a banana; armed on a hill (the contest),
+//      go to the hill and hold it; else keep a throwing distance from the
+//      nearest enemy; with nobody in sight (fog), go where an enemy was last
+//      seen or called out, else explore;
 //   4. throw at the nearest enemy, leading its motion, when the line is clear;
 //   5. grid with a call ability: call out the cell of an enemy it sees.
 // Everything it keeps between ticks is a member with a default initialiser
@@ -232,6 +233,17 @@ struct Starter {
     Cell goal{};
     if (me.ammo() == 0) {
       if (const kfm::Pickup p = kfm::nearestBananaPickup(o, me.pos())) goal = grid.cellOf(p.pos());
+    }
+    // Hill (the contest since engine v0.7.0): armed, walk to the hill and
+    // hold it, standing to aim at whoever comes; the dodge and the throw
+    // still run around this.
+    const kfm::Maybe<kfm::Zone> hill = o.hill();
+    if (!goal.valid() && hill && o.modeKind() == KFM_MODE_HILL && me.ammo() > 0) {
+      if (hill.value.contains(me.pos())) {
+        if (target) in.aim(kfm::dirTo(me.pos(), target.pos()));
+        return;
+      }
+      goal = grid.cellOf(hill.value.centre());
     }
     if (!goal.valid() && target) {
       const Cell t = grid.cellOf(target.pos());

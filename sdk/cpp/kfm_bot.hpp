@@ -363,6 +363,19 @@ class Call {
   int index_;
 };
 
+// An objective zone of the arena (engine v0.7.0, bot-abi.md §3): a closed
+// box; a monkey whose centre is inside stands in it. The hill is zone 0.
+struct Zone {
+  Vec2 min;
+  Vec2 max;
+  bool contains(Vec2 p) const {
+    return p.x >= min.x && p.x <= max.x && p.y >= min.y && p.y <= max.y;
+  }
+  Vec2 centre() const {
+    return Vec2::fromRaw((min.x.raw + max.x.raw) / 2, (min.y.raw + max.y.raw) / 2);
+  }
+};
+
 // The observation the host wrote for this tick. A view: it never copies the
 // 5748-byte buffer.
 class Observation {
@@ -420,6 +433,21 @@ class Observation {
   Span<kfm_obs_box> walls() const { return Span<kfm_obs_box>{o_.arena.walls, o_.arena.wallCount}; }
   Span<kfm_obs_hazard> hazards() const {
     return Span<kfm_obs_hazard>{o_.arena.hazards, o_.arena.hazardCount};
+  }
+  // The arena's zone k (k < KFM_ZONES), none when the arena has no zone k or
+  // the host predates engine v0.7.0 (the words were 0). Zone 0 is the hill, a
+  // capture team t's home is zone t.
+  Maybe<Zone> zone(int k) const {
+    if (k < 0 || k >= KFM_ZONES) return Maybe<Zone>{};
+    const uint32_t* w = &o_.match.modeData[KFM_ZONE_WORD + (4 * k)];
+    if ((w[0] | w[1] | w[2] | w[3]) == 0) return Maybe<Zone>{};
+    return just(Zone{Vec2::fromRaw(static_cast<int32_t>(w[0]), static_cast<int32_t>(w[1])),
+                     Vec2::fromRaw(static_cast<int32_t>(w[2]), static_cast<int32_t>(w[3]))});
+  }
+  Maybe<Zone> hill() const { return zone(0); }
+  // Hill mode: the team holding the hill alone, -1 when nobody or it is contested.
+  int hillHolder() const {
+    return o_.match.modeKind == KFM_MODE_HILL ? static_cast<int>(o_.match.modeData[5]) - 1 : -1;
   }
 
  private:
