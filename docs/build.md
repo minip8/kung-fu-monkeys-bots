@@ -209,10 +209,20 @@ mode, the module's team against a `ref:hard` team. It reads the match objects of
 objects `--quiet` drops) and fails if `kfm_arena` exits non-zero or any module slot has `traps`,
 `over` or `bad` above 0 or a `dead` that is not `null`. Winning is not checked.
 
-**Bumping the engine.** Set `commit=` to the new engine commit (and `tag=` to its release once
-there is one: the commit that tag points at), copy that commit's `tools/bots/sdk-c/kfm_bot.h`
-to `sdk/c/kfm_bot.h`, update `sdk/c/ENGINE_SOURCE.txt`, run `tools/check_header.sh`, rebuild
-and play the examples, and commit it all together.
+**Bumping the engine.** `tools/bump_engine.sh <tag>` does the mechanical part: it resolves the
+engine release's tag to its commit and sets `tag=` and `commit=`, copies that commit's
+`tools/bots/sdk-c/kfm_bot.h` to `sdk/c/kfm_bot.h`, rewrites `sdk/c/ENGINE_SOURCE.txt` and the
+lines above and in `service/README.md` that name today's pin, and runs `tools/check_header.sh`.
+It commits nothing. Then rebuild and play the examples and commit it all together; when the
+script says the header changed, `sdk/cpp/kfm_bot.hpp`, the examples and the prose that describes
+the contest are yours to bring along first.
+
+The engine's release workflow does this on every `v*` tag (its `deploy.yml`, job `bots-bump`,
+once the release has its `kfm_arena` assets): it runs the script in a checkout of this
+repository and opens a pull request from `chore/engine-<tag>` as the `kfm-release-bot` GitHub
+App, so this repository's CI plays the examples with the new runner before anyone merges. A
+merged bump changes what CI and `kfm` play with; the ladder runs the new engine only after
+this repository's own release (`deploy/README.md`), which stays a deliberate tag.
 
 **Bumping the toolchain.** Change the `FROM` line (tag and digest) of the `Dockerfile`, the
 emsdk version of CI's no-docker build (`.github/workflows/ci.yml`) and the version named in
