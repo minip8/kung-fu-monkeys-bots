@@ -13,7 +13,7 @@ there first.
 
 | Path | What |
 |---|---|
-| `src/main.rs` | The CLI: `serve`, `migrate`, `season create|list`, `worker build`, `worker match`. |
+| `src/main.rs` | The CLI: `serve`, `migrate`, `season create|list`, `operator add|remove|list`, `worker build`, `worker match`. |
 | `src/config.rs` | The environment, per role (`Config` for `serve`, `WorkerConfig`, `database_url_from`). |
 | `src/oauth.rs` | GitHub (`oauth2`) and Google (`openidconnect`, discovery) sign-in, linking, logout. |
 | `src/auth.rs` | Session cookies, the `Caller` extractor (session or bearer), CSRF. |
@@ -42,6 +42,9 @@ kfm-ladder serve           # migrate, then serve the API and the portal on KFM_L
 kfm-ladder migrate         # apply pending migrations and exit (needs DATABASE_URL only)
 kfm-ladder season create NAME --start RFC3339 --end RFC3339 [--mode contest]   # an operator's new season
 kfm-ladder season list     # name, start, end, mode, id; "current" on the one whose window holds now
+kfm-ladder operator add USER      # an account (id or display name) not held to one team: it owns the house teams
+kfm-ladder operator remove USER   # hold it to one team again (its memberships stay)
+kfm-ladder operator list   # the operators: id, display name
 kfm-ladder worker build    # claim build and validate jobs until SIGTERM
 kfm-ladder worker match    # claim match jobs until SIGTERM
 ```

@@ -115,6 +115,9 @@ struct UserView {
     providers: Vec<ProviderView>,
     tokens: Vec<TokenView>,
     teams: Vec<TeamView>,
+    /// Whether the "Create team" form is shown: an account without a team,
+    /// or an operator's (v1.5).
+    can_create_team: bool,
 }
 
 struct NewTokenView {
@@ -269,6 +272,7 @@ async fn user_view(state: &AppState, session: &Session) -> AppResult<UserView> {
         csrf: session.csrf.clone(),
         providers,
         tokens,
+        can_create_team: user.operator || team_views.is_empty(),
         teams: team_views,
     })
 }

@@ -11,7 +11,7 @@ use kfm_ladder::config::{database_url_from, Config, WorkerConfig};
 use kfm_ladder::match_worker::{MatchSettings, MatchWorker};
 use kfm_ladder::store::Store;
 use kfm_ladder::worker;
-use kfm_ladder::{db, scheduler, seasons, AppState};
+use kfm_ladder::{db, scheduler, seasons, users, AppState};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -47,6 +47,32 @@ enum Command {
         #[command(subcommand)]
         action: SeasonAction,
     },
+    /// Make an account an operator, or list them (an operator action on the
+    /// VM; needs DATABASE_URL only, and applies pending migrations first).
+    /// An operator's account is not held to one team: it owns the house
+    /// teams. The flag gives nothing else and is never set over HTTP.
+    Operator {
+        #[command(subcommand)]
+        action: OperatorAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum OperatorAction {
+    /// Lift the one-team limit for the account.
+    Add {
+        /// The user's id, or the display name (ignoring case) if only one
+        /// account has it.
+        user: String,
+    },
+    /// Hold the account to one team again. Its memberships stay; it joins no
+    /// other team while it has one.
+    Remove {
+        /// The user's id, or the display name.
+        user: String,
+    },
+    /// List the operators: id and display name.
+    List,
 }
 
 #[derive(Subcommand, Debug)]
@@ -146,6 +172,41 @@ fn main() -> ExitCode {
                         for season in seasons::list(&pool).await? {
                             println!("{}", seasons::format_line(&season, now));
                         }
+                    }
+                }
+                Ok(())
+            })
+        }
+        Command::Operator { action } => {
+            let url = match database_url_from(|k| std::env::var(k).ok()) {
+                Ok(url) => url,
+                Err(err) => {
+                    eprintln!("kfm-ladder: {err}");
+                    return ExitCode::from(2);
+                }
+            };
+            init_logging();
+            run(async move {
+                let pool = db::connect(&url, DB_PATIENCE).await?;
+                db::migrate(&pool).await?;
+                let changed = match &action {
+                    OperatorAction::Add { user } => Some((user, true)),
+                    OperatorAction::Remove { user } => Some((user, false)),
+                    OperatorAction::List => None,
+                };
+                if let Some((reference, operator)) = changed {
+                    // The codes' fixed messages name what went wrong
+                    // (`unknown_user`, `ambiguous_user`).
+                    let user = users::set_operator(&pool, reference, operator)
+                        .await
+                        .map_err(|err| err.code().message())?;
+                    println!("{}", users::format_line(&user));
+                } else {
+                    for user in users::operators(&pool)
+                        .await
+                        .map_err(|e| e.code().message())?
+                    {
+                        println!("{}", users::format_line(&user));
                     }
                 }
                 Ok(())

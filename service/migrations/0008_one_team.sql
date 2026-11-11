@@ -1,0 +1,17 @@
+-- One team per account (ladder API v1.5, architecture v0.78).
+--
+-- An entrant is a team and a rating is a team's, so an account in several
+-- teams is several entrants: it could hold several places on the board and
+-- be paired against itself. From v1.5 the service refuses a membership to an
+-- account that already has one (teams::ensure_may_join, at team creation and
+-- when an owner adds a member).
+--
+-- The exception is an operator: the account of whoever runs the ladder, which
+-- owns the house teams (the example bots every entrant is paired against).
+-- The flag is set on the service's VM (`kfm-ladder operator add`), never over
+-- HTTP, and lifts only this limit: it is no admin role over the API.
+--
+-- The rule is enforced in the service, under a lock on the user's row, not by
+-- a unique index: an index could not except the operators, and memberships
+-- made before v1.5 stay as they are.
+ALTER TABLE users ADD COLUMN operator boolean NOT NULL DEFAULT false;

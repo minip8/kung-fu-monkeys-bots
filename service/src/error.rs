@@ -74,6 +74,7 @@ error_codes! {
     RateLimited = ("rate_limited", TOO_MANY_REQUESTS, "A team submits at most once a minute; try again shortly."),
     NotReady = ("not_ready", CONFLICT, "Only a ready submission can be made active."),
     InvalidCode = ("invalid_code", BAD_REQUEST, "The login code is unknown, used or expired; run kfm login again."),
+    AlreadyInTeam = ("already_in_team", CONFLICT, "An account is in at most one team, and this one already has a team."),
 }
 
 /// An API error: `{"error":"<code>","message":"<message>"}` with the code's status.

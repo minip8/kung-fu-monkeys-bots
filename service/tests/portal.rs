@@ -362,3 +362,38 @@ async fn the_privacy_contact_is_configurable(pool: PgPool) {
     );
     assert!(html.contains("48 hours"));
 }
+
+#[sqlx::test]
+async fn the_create_team_form_is_for_an_account_without_a_team(pool: PgPool) {
+    let app = start(pool.clone()).await;
+    let mut solo = github_browser(&app, 4030, "single").await;
+    let html = page(&mut solo, "/").await;
+    assert!(html.contains("action=\"/portal/teams\""));
+    let csrf = csrf_in(&html);
+    let response = solo
+        .post_form("/portal/teams", &[("csrf", &csrf), ("name", "Only Team")])
+        .await;
+    assert_eq!(location(&response), "/");
+
+    // In a team: no form, and the route refuses with the rule's message.
+    let html = page(&mut solo, "/").await;
+    assert!(html.contains("Only Team"));
+    assert!(!html.contains("action=\"/portal/teams\""));
+    let response = solo
+        .post_form("/portal/teams", &[("csrf", &csrf), ("name", "Another")])
+        .await;
+    assert_eq!(location(&response), "/?error=already_in_team");
+    let html = page(&mut solo, "/?error=already_in_team").await;
+    assert!(html.contains("at most one team"));
+
+    // An operator keeps the form.
+    kfm_ladder::users::set_operator(&pool, "single", true)
+        .await
+        .unwrap();
+    let html = page(&mut solo, "/").await;
+    assert!(html.contains("action=\"/portal/teams\""));
+    let response = solo
+        .post_form("/portal/teams", &[("csrf", &csrf), ("name", "Another")])
+        .await;
+    assert_eq!(location(&response), "/");
+}

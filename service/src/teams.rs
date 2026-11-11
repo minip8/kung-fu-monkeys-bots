@@ -1,6 +1,7 @@
 //! Teams: the ladder's entrants. A team has owners and members; the creator
 //! is its owner; an owner adds members; a member leaves (or an owner removes
-//! them); the last owner cannot leave.
+//! them); the last owner cannot leave. An account is in at most one team
+//! (v1.5), unless it is an operator's (`users.operator`): the house teams.
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -77,10 +78,39 @@ pub fn clean_name(name: &str) -> AppResult<String> {
     }
 }
 
+/// The one-team rule (v1.5): locks the user's row, so two joins of one
+/// account serialise, and refuses with `already_in_team` when the account is
+/// in a team already and is not an operator's. `not_found` if the user does
+/// not exist.
+async fn ensure_may_join(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user: Uuid,
+) -> AppResult<()> {
+    let row: Option<(bool,)> =
+        sqlx::query_as("SELECT operator FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user)
+            .fetch_optional(&mut **tx)
+            .await?;
+    let (operator,) = row.ok_or(AppError(ErrorCode::NotFound))?;
+    if operator {
+        return Ok(());
+    }
+    let (in_team,): (bool,) =
+        sqlx::query_as("SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1)")
+            .bind(user)
+            .fetch_one(&mut **tx)
+            .await?;
+    if in_team {
+        return Err(AppError(ErrorCode::AlreadyInTeam));
+    }
+    Ok(())
+}
+
 pub async fn create_team(db: &PgPool, owner: Uuid, name: &str) -> AppResult<Team> {
     let name = clean_name(name)?;
     let id = Uuid::now_v7();
     let mut tx = db.begin().await?;
+    ensure_may_join(&mut tx, owner).await?;
     let created: Result<(OffsetDateTime,), sqlx::Error> = sqlx::query_as(
         "INSERT INTO teams (id, name, created_by) VALUES ($1, $2, $3) RETURNING created_at",
     )
@@ -188,6 +218,18 @@ pub async fn add_member(db: &PgPool, caller: Uuid, team: Uuid, reference: &str) 
     if count >= MAX_MEMBERS {
         return Err(AppError(ErrorCode::LimitReached));
     }
+    // A member of this team is `already_member`, whatever else it is in.
+    let (member,): (bool,) = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM memberships WHERE team_id = $1 AND user_id = $2)",
+    )
+    .bind(team)
+    .bind(user)
+    .fetch_one(&mut *tx)
+    .await?;
+    if member {
+        return Err(AppError(ErrorCode::AlreadyMember));
+    }
+    ensure_may_join(&mut tx, user).await?;
     let added = sqlx::query(
         "INSERT INTO memberships (team_id, user_id, role) VALUES ($1, $2, 'member') \
          ON CONFLICT (team_id, user_id) DO NOTHING",
