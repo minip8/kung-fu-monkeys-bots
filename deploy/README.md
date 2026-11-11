@@ -134,9 +134,9 @@ the same path inside and outside (`KFM_LADDER_BUILD_DIR`, and `TMPDIR` too).
    is held to one team (`docs/ladder-api.md` §7, v1.5); the account that owns the house teams
    is made an operator, on the ladder VM with the same image, after it has signed in once:
    ```sh
-   sudo docker run --rm --network host --env-file /etc/kfm/ladder.env ghcr.io/minip8/kfm-ladder:v0.1.5 \
+   sudo docker run --rm --network host --env-file /etc/kfm/ladder.env ghcr.io/minip8/kfm-ladder:v0.1.6 \
      operator add <user id>     # the id is on the portal's account section and in `kfm whoami`
-   sudo docker run --rm --network host --env-file /etc/kfm/ladder.env ghcr.io/minip8/kfm-ladder:v0.1.5 operator list
+   sudo docker run --rm --network host --env-file /etc/kfm/ladder.env ghcr.io/minip8/kfm-ladder:v0.1.6 operator list
    ```
    Then that account creates one team per house bot on the portal and submits each with
    `kfm submit examples/<bot> --team "<name>" --activate --wait`.
