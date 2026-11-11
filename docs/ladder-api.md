@@ -1,14 +1,15 @@
-# Kung Fu Monkeys ladder API v1.4
+# Kung Fu Monkeys ladder API v1.5
 
 Status: normative, append-only from v1.0 (2026-11-07, M7 step 3a, engine architecture v0.63);
 v1.1 (2026-11-07, M7 step 3b) serves submissions; v1.2 (2026-11-07, M7 step 4) serves seasons,
 the scheduler's matches, the ratings and the ladder (§10); v1.3 (2026-11-07, M7 step 5) serves
 the `kfm` CLI's login (§5.1); v1.4 (2026-11-07) keeps replays for 24 hours (§10.6), limits
-the routes that presign per client (§2) and serves the privacy page (§8).
+the routes that presign per client (§2) and serves the privacy page (§8); v1.5 (2026-11-11,
+engine architecture v0.78) holds an account to one team, an operator's excepted (§7).
 The design and its rationale are the engine's `docs/architecture.md` §8 "The ladder" and §11
 "M7 step 3 design". This file is the HTTP surface shared by the service (`service/`, the
 `kfm-ladder` binary), its portal and the `kfm` command line tool; change it here first. Every
-route below is served as of v1.4.
+route below is served as of v1.5.
 
 ## 1. Transport and conventions
 
@@ -64,6 +65,7 @@ The service never puts internals (SQL, a provider's reply, a path) in either. Co
 | `limit_reached` | 409 | A cap was reached: 25 live tokens per user, 32 members per team. |
 | `not_ready` | 409 | Only a `ready` submission can be made active (v1.1). |
 | `invalid_code` | 400 | A CLI login code that is malformed, unknown, already exchanged or expired (v1.3, §5.1). |
+| `already_in_team` | 409 | The account creating a team, or the user being added to one, is in a team already (v1.5, §7). |
 | `too_large` | 413 | An upload is over its cap: 4 MiB of `source.zip` (v1.1). |
 | `rate_limited` | 429 | A team submits at most once a minute (v1.1); a client asked for presigned links too often (v1.4, below). |
 | `oauth_failed` | 502 | The provider's reply could not be obtained or verified (token exchange, profile, id token). |
@@ -241,7 +243,7 @@ its bearer (§6, v1.3), then forgets it.
 ### `GET /me` (auth: any)
 
 ```json
-{"id":"…","display_name":"octomonkey","created_at":"…",
+{"id":"…","display_name":"octomonkey","created_at":"…","operator":false,
  "identities":[{"provider":"github","name":"octomonkey","email":"o@example.org","linked_at":"…"}],
  "auth":"session","csrf":"…"}
 ```
@@ -251,6 +253,7 @@ its bearer (§6, v1.3), then forgets it.
 | `id` | id | always | The user. |
 | `display_name` | string | always | 1 to 64 characters, chosen at account creation. Not unique. |
 | `created_at` | time | always | |
+| `operator` | bool | always | Whether the account is an operator's (v1.5, §7): not held to one team. |
 | `identities` | array | always | One entry per linked provider, by provider name. |
 | `identities[].provider` | string | always | `"github"` or `"google"`. |
 | `identities[].name` | string or null | always | The provider's login (GitHub) or name (Google), as last reported. |
@@ -303,6 +306,28 @@ A team name is trimmed and then 3 to 32 characters of ASCII letters, digits, spa
 and `.`, starting and ending with a letter or digit, with no double space (`invalid_name`).
 Names are unique ignoring case (`name_taken`). A team has at most 32 members (`limit_reached`).
 
+**One team per account (v1.5).** An account is a member of at most one team, as owner or
+member: an entrant is a team and the rating is the team's, so an account in two teams would be
+two entrants, holding two places on the board and paired against itself. Creating a team while
+in one, and adding a user who is in one, are refused with `already_in_team` and change nothing;
+an account that left its team (below) may join or create another. The rule is judged when a
+membership is made: memberships from before v1.5 stay.
+
+The exception is an **operator**: the account of whoever runs the ladder, which owns the
+**house teams** (the example bots every entrant is paired against, so that a first submission
+has opponents). An operator creates and joins any number of teams; the flag lifts this limit
+and nothing else (it is no admin role: an operator has no route another account lacks), it
+belongs to the account and not to the teams it owns, and it is set on the service's VM, never
+over HTTP:
+
+```sh
+kfm-ladder operator add <user id or display name>     # lift the limit for the account
+kfm-ladder operator remove <user id or display name>  # hold it to one team again; its memberships stay
+kfm-ladder operator list                              # id, display name
+```
+
+`GET /me` shows it as `operator` (§6).
+
 A team object:
 
 | Key | Type | Present | Meaning |
@@ -320,7 +345,7 @@ A team object:
 
 | Method and path | Auth | Request | Response |
 |---|---|---|---|
-| `POST /teams` | session | `{"name":"Banana Squad"}` | `201`, the team. |
+| `POST /teams` | session | `{"name":"Banana Squad"}` | `201`, the team. `already_in_team` if the caller is in a team and no operator (v1.5). |
 | `GET /teams` | any | | `200 {"teams":[{"id","name","role","created_at"}…]}`: the caller's teams, by name, `role` the caller's. |
 | `GET /teams/{id}` | none | | `200`, the team (teams are public). |
 | `POST /teams/{id}/members` | session | `{"user":"<id or display name>"}` | `200`, the team. |
@@ -329,12 +354,14 @@ A team object:
 Adding a member: the caller must be an owner (`forbidden`; `not_found` if the team does not
 exist). `user` is a user id, or a display name compared ignoring case (`unknown_user` if none,
 `ambiguous_user` if several share it). The user joins at once as a `member` (`already_member`
-if they are one). There is no invitation to accept in v1.0.
+if they are one; `already_in_team` if they are in another team and no operator, v1.5). There is
+no invitation to accept in v1.0.
 
 Removing a member: the caller removes themself (leaves) or is an owner (`forbidden`
 otherwise); `{user}` must be a member (`not_found`). An owner may leave, or be removed, only
 while another owner remains (`last_owner`). v1.0 has no route that promotes a member or deletes
-a team.
+a team, so under the one-team rule the only owner of a team stays in it: an account that made
+a team of one cannot move to another team (a route to dissolve a team is a later addition).
 
 ## 8. The portal
 
@@ -342,7 +369,7 @@ The portal is the same service rendered as HTML (askama templates, no JavaScript
 
 | Method and path | What |
 |---|---|
-| `GET /` | Signed out: sign in with GitHub or Google. Signed in: the account and its identities (a link button for the provider not yet linked), tokens (create, revoke), teams (create, add member, leave or remove) and each team's submissions (upload, the list with state, module hash, error, ranked games and faults and a link to the log, an Activate button on ready ones, the active one marked; v1.1), its standing in the current season and its last ten games with links to their pages (v1.2). Shows `?error=<code>` as the code's message (with the `&detail=` text for `bad_manifest` and `bad_source`, v1.1) and `?linked=<provider>` as a notice. |
+| `GET /` | Signed out: sign in with GitHub or Google. Signed in: the account and its identities (a link button for the provider not yet linked), tokens (create, revoke), teams (create, shown to an account without a team and to an operator, v1.5; add member, leave or remove) and each team's submissions (upload, the list with state, module hash, error, ranked games and faults and a link to the log, an Activate button on ready ones, the active one marked; v1.1), its standing in the current season and its last ten games with links to their pages (v1.2). Shows `?error=<code>` as the code's message (with the `&detail=` text for `bad_manifest` and `bad_source`, v1.1) and `?linked=<provider>` as a notice. |
 | `GET /privacy` | The privacy page (v1.4): who runs the service (`KFM_LADDER_CONTACT`), what it stores and why, what it does not, IP addresses, the third parties, how to have data deleted. Public; every portal page's footer links to it. |
 | `GET /ladder` | With `Accept: text/html` (a browser): the board of §10.5 as a page, paged, with links to every season (v1.2). |
 | `GET /matches/{m}` | With `Accept: text/html`: the game's page: both sides with score, kills, deaths, rating change and faults, the replay's download link, the viewer link, the seed and hashes to re-run it, and the raw result (v1.2). |
@@ -740,15 +767,17 @@ presigned URL, so the bucket must allow that origin's GET (CORS, `deploy/README.
 | v1.2 | Seasons, the scheduler, the match job, ratings and the board served (§10): `GET /seasons`, `GET /ladder`, `GET /matches`, `GET /matches/{m}` and their portal pages; the team object's `rating`; the submission object's `ranked_games` and `ranked_faults`; `kfm-ladder season create|list`. Refined from the reserved shapes: the board's rows are `rank`, `rd` (not `deviation`), the record and the active module's hash, with `page` beside `next`; a match is one game of a pair's two-game run, with its sides, faults and rating changes; `GET /ladder` and `GET /matches/{m}` answer HTML to a browser. |
 | v1.3 | The `kfm` CLI's login (§5.1): `GET /auth/cli`, `POST /auth/cli`, `POST /auth/cli/exchange`; a sign-in start's `?next=` (the CLI page only); the code `invalid_code`; `DELETE /tokens/{id}` with that token as the bearer (a token revokes itself); `GET /seasons`' `engine_tag`. |
 | v1.4 | Replay retention (§10.6): a game's replay is deleted 24 hours after it was recorded (`KFM_LADDER_REPLAY_HOURS`), after which its `replay_url` and `viewer_url` are `null`; the match row stays. The presigning limit (§2): `GET /matches/{m}` and `GET /submissions/{s}` answer `429 rate_limited` with `Retry-After` past 60 requests a minute per client IP (`KFM_LADDER_PRESIGN_PER_MINUTE`, `KFM_LADDER_TRUST_PROXY`). The round interval's default becomes 1800 seconds (§10.2). The portal's `GET /privacy` page (§8). The production origin is `https://bots.kfm.minip8.com`. |
+| v1.5 | One team per account (§7): `POST /teams` and `POST /teams/{id}/members` refuse a second membership with the new code `already_in_team` (a rule tightened, no route or key changed; memberships from before stay); operators, set by `kfm-ladder operator add|remove|list` on the VM, are excepted and own the house teams; `GET /me` gains `operator`; the portal shows the create-team form only to an account that may use it. |
 
 ## 12. Configuration of the binary
 
 `kfm-ladder serve` (API and portal, and the scheduler, §10.2; runs pending migrations first),
 `kfm-ladder migrate` (apply migrations and exit), `kfm-ladder season create|list` (§10.1; applies
-migrations first), `kfm-ladder worker build` (build and validate jobs, §9.6) and `kfm-ladder
-worker match` (match jobs, §10.3). Workers never migrate, and stop on SIGTERM once the job in
-hand is done. Configuration is the environment only, per role: `migrate` and `season` read only
-`DATABASE_URL` (and `SENTRY_DSN`); a worker never reads the session key, the OAuth apps, the
+migrations first), `kfm-ladder operator add|remove|list` (§7, v1.5; applies migrations first),
+`kfm-ladder worker build` (build and validate jobs, §9.6) and `kfm-ladder worker match` (match
+jobs, §10.3). Workers never migrate, and stop on SIGTERM once the job in
+hand is done. Configuration is the environment only, per role: `migrate`, `season` and `operator` read
+only `DATABASE_URL` (and `SENTRY_DSN`); a worker never reads the session key, the OAuth apps, the
 public URL or the listen address; `worker build` also needs `KFM_BUILD_IMAGE`,
 `KFM_LADDER_BUILD_DIR` (an absolute path) and `KFM_LADDER_ARENA`, and `worker match` needs
 `KFM_LADDER_ARENA` (and may set `KFM_LADDER_MATCH_TICKS`); `serve` needs the full set and may set

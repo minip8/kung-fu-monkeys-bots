@@ -55,7 +55,7 @@
 
 <section>
   <h2>Teams</h2>
-  <p class="muted">An entrant is a team; a solo player is a team of one.</p>
+  <p class="muted">An entrant is a team; a solo player is a team of one. An account is in one team at a time.</p>
   {% for team in user.teams %}
   <div class="team">
     <strong>{{ team.name }}</strong> <span class="muted">(you: {{ team.role }}, id <code>{{ team.id }}</code>)</span>
@@ -117,11 +117,13 @@
     <p class="muted">A zip of the bot's sources (at most 4 MiB), built by the ladder with the pinned toolchain and checked in one match against the reference bot. One submission per team per minute; the five most recent are kept, plus the active one.</p>
   </div>
   {% endfor %}
+  {% if user.can_create_team %}
   <form class="row" method="post" action="/portal/teams">
     <input type="hidden" name="csrf" value="{{ user.csrf }}">
     <input type="text" name="name" placeholder="New team name (3 to 32 characters)" minlength="3" maxlength="32" required>
     <button type="submit">Create team</button>
   </form>
+  {% endif %}
 </section>
 {% else %}
 <section class="signin">

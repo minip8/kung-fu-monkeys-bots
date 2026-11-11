@@ -129,6 +129,17 @@ the same path inside and outside (`KFM_LADDER_BUILD_DIR`, and `TMPDIR` too).
      season create 2026-12 --start 2026-12-01T00:00:00Z --end 2027-01-01T00:00:00Z
    sudo docker run --rm --network host --env-file /etc/kfm/ladder.env ghcr.io/minip8/kfm-ladder:v0.1.0 season list
    ```
+   **House teams.** A round needs two teams with a ready bot, so the ladder runs house teams
+   (the examples `starter` and `holder`) for a first entrant to be paired against. An account
+   is held to one team (`docs/ladder-api.md` §7, v1.5); the account that owns the house teams
+   is made an operator, on the ladder VM with the same image, after it has signed in once:
+   ```sh
+   sudo docker run --rm --network host --env-file /etc/kfm/ladder.env ghcr.io/minip8/kfm-ladder:v0.1.5 \
+     operator add <user id>     # the id is on the portal's account section and in `kfm whoami`
+   sudo docker run --rm --network host --env-file /etc/kfm/ladder.env ghcr.io/minip8/kfm-ladder:v0.1.5 operator list
+   ```
+   Then that account creates one team per house bot on the portal and submits each with
+   `kfm submit examples/<bot> --team "<name>" --activate --wait`.
    The API's scheduler then makes a round every `KFM_LADDER_ROUND_SECONDS` (default 1800) and
    the match workers play it. It also deletes replays older than `KFM_LADDER_REPLAY_HOURS`
    (default 24) from the bucket every 10 minutes; the matches themselves stay. The bucket

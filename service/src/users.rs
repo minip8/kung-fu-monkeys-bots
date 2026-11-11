@@ -19,6 +19,9 @@ pub struct User {
     pub display_name: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    /// Whether the one-team limit is lifted for this account (v1.5): set by
+    /// `kfm-ladder operator add` on the service's VM, never over HTTP.
+    pub operator: bool,
 }
 
 /// A linked provider account as `GET /me` shows it.
@@ -47,11 +50,49 @@ pub fn clean_display_name(raw: &str) -> Option<String> {
 }
 
 pub async fn get_user(db: &PgPool, id: Uuid) -> AppResult<User> {
-    sqlx::query_as("SELECT id, display_name, created_at FROM users WHERE id = $1")
+    sqlx::query_as("SELECT id, display_name, created_at, operator FROM users WHERE id = $1")
         .bind(id)
         .fetch_optional(db)
         .await?
         .ok_or(AppError(ErrorCode::NotFound))
+}
+
+/// Makes the user named by `reference` (an id or a display name) an operator,
+/// or an ordinary account again (`kfm-ladder operator add|remove`). Taking the
+/// flag away leaves the account's memberships as they are: it only stops the
+/// account from joining another team while it has one.
+pub async fn set_operator(db: &PgPool, reference: &str, operator: bool) -> AppResult<User> {
+    let mut conn = db.acquire().await?;
+    let id = find_user(&mut conn, reference).await?;
+    Ok(sqlx::query_as(
+        "UPDATE users SET operator = $2 WHERE id = $1 \
+         RETURNING id, display_name, created_at, operator",
+    )
+    .bind(id)
+    .bind(operator)
+    .fetch_one(&mut *conn)
+    .await?)
+}
+
+/// A user as the `operator` command prints it: id, display name and
+/// `operator` on one, tab separated.
+pub fn format_line(user: &User) -> String {
+    format!(
+        "{}\t{}{}",
+        user.id,
+        user.display_name,
+        if user.operator { "\toperator" } else { "" }
+    )
+}
+
+/// Every operator, by display name then id (`kfm-ladder operator list`).
+pub async fn operators(db: &PgPool) -> AppResult<Vec<User>> {
+    Ok(sqlx::query_as(
+        "SELECT id, display_name, created_at, operator FROM users WHERE operator \
+         ORDER BY lower(display_name), id",
+    )
+    .fetch_all(db)
+    .await?)
 }
 
 pub async fn identities(db: &PgPool, user_id: Uuid) -> AppResult<Vec<Identity>> {
