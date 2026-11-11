@@ -41,7 +41,7 @@ built as C.
 |---|---|
 | `sdk/c/kfm_bot.h` | The C SDK: one freestanding header with the `Observation` v1 structs (layout checked by `static_assert`), the input packing, Q16.16 math, the engine's sine table, atan2 and Rng, and the banana flight step, all bit for bit with the engine. A byte-identical copy of the engine's `tools/bots/sdk-c/kfm_bot.h` (`sdk/c/ENGINE_SOURCE.txt`); never edit it here. |
 | `sdk/cpp/kfm_bot.hpp` | The C++ layer over it: `Fixed` and `Vec2` with operators, views over the observation that iterate only what is there, an `Input` builder, the `KFM_BOT` macro that defines the exports, and helpers (nearest enemy and banana, flight prediction and time to impact, "will this hit me", the dash-catch direction, a clear throwing line, the grid's cells and walking). Every helper is documented in the header. |
-| `examples/` | Example bots, one directory each: `idle`, `chaser` (C) and `starter` (C++, the one to copy). `examples/README.md` says what each does and how to build and run them. |
+| `examples/` | Example bots, one directory each: `idle`, `chaser` (C), `starter` (C++, the one to copy) and `holder` (C++, the starter that stays on the hill). `examples/README.md` says what each does and how to build and run them. |
 | `tools/build.sh` | The build recipe: `tools/build.sh <bot dir> <out.wasm>`. |
 | `tools/fetch_kfm_arena.sh` | Fetches the engine's released headless `kfm_arena` for the pinned engine into `.kfm/`. |
 | `docs/build.md` | The recipe in full, the build sandbox, the engine pin and CI. |
