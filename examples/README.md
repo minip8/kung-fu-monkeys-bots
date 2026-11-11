@@ -8,6 +8,7 @@ directory into one module, so a directory is a bot. Copy one to start your own.
 | `idle/` | C | The smallest module: never moves, never presses anything. |
 | `chaser/` | C | The engine's C example (from `tools/bots/examples/chaser.c` of the game repository). |
 | `starter/` | C++ | The bot to copy: the C++ layer, both spaces, the contest mode. |
+| `holder/` | C++ | The starter with one change for the contest: it stays on the hill, armed or not. A house entrant on the ladder. |
 
 **idle** (`idle/bot.c`) defines `kfm_init` and `kfm_act` over the C header and returns the
 idle input every tick. It shows the least a module needs (the header's `KFM_BOT_MAIN` defines
@@ -38,6 +39,20 @@ grid since engine v0.7.0, measured there; `ref:hard` ignores the hill) it beats 
 and under 65 k with ten monkeys and many bananas in the air. It is a starting point, not a
 strong bot: see "Where to go from here" in `starter/bot.cpp`'s header comment.
 
+**holder** (`holder/bot.cpp`) is the starter with one change of priorities in a hill mode: it
+walks to the hill cell nearest to it and stays on the hill armed or not, where the starter
+leaves to fetch a banana whenever its hand is empty. Only a team alone on the hill scores, and
+an unarmed monkey standing there still stops the other team's clock, so in the contest being
+there is worth more than the banana. Outside a hill mode it is the starter, tick for tick.
+Measured with engine v0.9.0's `kfm_arena` in the ladder's shape (five against five, `--mode
+contest --rotate --seed 1`, 200 games each): it beats the starter 187 to 13 and `ref:hard` 189
+to 11 while being eliminated about one and a half times as often as it eliminates, with no
+fault and `fuel_max` under 50 k. Against itself both teams stand on the hill, nobody holds it
+alone for long, and 156 games of 200 ran to the mode's 3600-turn clock (48 of them draws): a
+bot that beats it has to clear the hill, not only stand on it. The starter and the holder are
+meant as the ladder's house entrants, so that a first submission is paired and rated from its
+first round (a round needs two teams).
+
 ## Building
 
 From the repository root, with the emsdk clang (or any clang that targets wasm32 and finds
@@ -45,6 +60,7 @@ From the repository root, with the emsdk clang (or any clang that targets wasm32
 
 ```sh
 tools/build.sh examples/starter out/starter.wasm
+tools/build.sh examples/holder out/holder.wasm
 tools/build.sh examples/chaser out/chaser.wasm
 tools/build.sh examples/idle out/idle.wasm
 ```
