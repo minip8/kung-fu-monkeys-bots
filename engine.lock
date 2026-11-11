@@ -5,12 +5,12 @@
 #         runner the examples are played with. Empty: no release has assets yet (the release
 #         workflow first runs on the tag after v0.4.0), so CI builds kfm_arena from `commit`.
 # commit: the engine commit, in full, whose tools/bots/sdk-c/kfm_bot.h sdk/c/kfm_bot.h copies
-#         byte for byte (be21832; sdk/c/ENGINE_SOURCE.txt names the same commit).
+#         byte for byte (3d16a96; sdk/c/ENGINE_SOURCE.txt names the same commit).
 #
 # To bump: tools/bump_engine.sh <tag> sets both lines, copies that commit's
 # tools/bots/sdk-c/kfm_bot.h to sdk/c/kfm_bot.h, updates sdk/c/ENGINE_SOURCE.txt and the docs
 # that name the pin, and runs tools/check_header.sh; then rebuild and play the examples and
 # commit it all together. The engine's release workflow runs the script on every v* tag and
 # opens the pull request. When a tag is set, commit must be the commit that tag points at.
-tag=v0.8.0
-commit=be218326a43fffe2d14f3f3c8cd1717a7ce19647
+tag=v0.9.0
+commit=3d16a969cc2bf6be62bd97e16a48fa568e7c4101
