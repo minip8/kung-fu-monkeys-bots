@@ -1,30 +1,41 @@
 {% extends "base.html" %}
 {% block title %}Kung Fu Monkeys ladder: {{ title }}{% endblock %}
+{% block page %}pg-games{% endblock %}
 {% block content %}
+<p class="eyebrow">Ranked game</p>
 <h1>{{ title }}</h1>
 <p class="sub">{% if !season.is_empty() %}Season {{ season }}, {% endif %}{% if !round.is_empty() %}round {{ round }}, {% endif %}{% if game > 1 %}game {{ game }} of its pair, {% endif %}{% if !arena.is_empty() %}on <code>{{ arena }}</code>, {% endif %}played {{ when }} with engine release <code>{{ engine_tag }}</code>.</p>
+<div class="score">
+  {% for s in sides %}
+  {% if loop.index0 == 1 %}<div class="pts">{{ score_a }}<span>:</span>{{ score_b }}</div>{% endif %}
+  <div class="side{% if s.won %} won{% endif %}"><b>{{ s.team_name }}</b><small>side {{ s.label }} · team {{ s.team }}</small></div>
+  {% endfor %}
+  <p>{{ outcome }} after {{ ticks }} ticks{% if !arena.is_empty() %} on {{ arena }}{% endif %}.</p>
+</div>
 <section>
-  <h2>{{ outcome }}</h2>
+  <h2>Sides</h2>
   <div class="scroll"><table>
     <tr><th>Side</th><th>Team</th><th class="num">Score</th><th class="num">Kills</th><th class="num">Deaths</th><th class="num">Rating</th><th>Faults</th></tr>
     {% for s in sides %}
-    <tr><td>{{ s.label }}</td><td>{% if s.won %}<strong>{{ s.name }}</strong>{% else %}{{ s.name }}{% endif %}</td><td class="num">{{ s.score }}</td><td class="num">{{ s.kills }}</td><td class="num">{{ s.deaths }}</td><td class="num">{{ s.change }}</td>
+    <tr><td>{{ s.label }}</td><td class="team">{% if s.won %}<strong>{{ s.name }}</strong>{% else %}{{ s.name }}{% endif %}</td><td class="num">{{ s.score }}</td><td class="num">{{ s.kills }}</td><td class="num">{{ s.deaths }}</td><td class="num">{{ s.change }}</td>
       <td>{% if s.faults.is_empty() %}<span class="muted">none</span>{% else %}{% for f in s.faults %}<span class="bad">{{ f }}</span><br>{% endfor %}{% endif %}</td></tr>
     {% endfor %}
   </table></div>
-  <p class="muted">{{ ending }}. A fault in a ranked game (a trap, an over-budget tick, a bad return, a dead module) is recorded and counted on the submission; the engine played "repeat last input" for those ticks.</p>
+  <p class="muted small">{{ ending }}. The score is the side's banked bananas less the ones stolen from its home (the <a href="/docs/contest">contest guide</a>). A fault in a ranked game (a trap, an over-budget tick, a bad return, a dead module) is recorded and counted on the submission; the engine played "repeat last input" for those ticks.</p>
 </section>
 <section>
   <h2>Replay</h2>
   {% if let Some(url) = replay_url %}
-  <p><a href="{{ url }}">Download the replay (.kfmr)</a> (the link is valid for an hour).
-  {% if let Some(viewer) = viewer_url %}<a href="{{ viewer }}">Watch it in the {{ engine_tag }} client</a> (the replay plays in engine releases after v0.5.1, whose page carries the replay viewer).{% endif %}</p>
-  <p class="muted">Re-run it bit for bit with the {{ engine_tag }} release's kfm_arena: {% if !arena.is_empty() %}arena {{ arena }}, {% endif %}seed {{ seed }}, {{ ticks }} ticks, each side on the team index shown above, content {{ content_hash }}, build {{ build_hash }}.</p>
+  <p>{% if let Some(viewer) = viewer_url %}<a class="button" href="{{ viewer }}">Watch it in the {{ engine_tag }} client</a> {% endif %}<a class="button quiet" href="{{ url }}">Download the replay (.kfmr)</a></p>
+  <p class="muted small">The links are valid for an hour; the replay plays in engine releases after v0.5.1, whose page carries the replay viewer.</p>
+  <p class="muted small">Re-run it bit for bit with the {{ engine_tag }} release's kfm_arena: {% if !arena.is_empty() %}arena {{ arena }}, {% endif %}seed {{ seed }}, {{ ticks }} ticks, each side on the team index shown above, content {{ content_hash }}, build {{ build_hash }}.</p>
   {% else %}<p class="muted">No replay is stored.</p>{% endif %}
 </section>
 <section>
-  <h2>Result</h2>
-  <p class="muted">The match object kfm_arena printed (the engine's docs/arena-result.md).</p>
-  <pre>{{ result }}</pre>
+  <details>
+    <summary>Result: the match object kfm_arena printed</summary>
+    <p class="muted small">Its keys are the engine's docs/arena-result.md.</p>
+    <pre class="raw">{{ result }}</pre>
+  </details>
 </section>
 {% endblock %}

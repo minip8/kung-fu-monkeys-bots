@@ -1,0 +1,6 @@
+<a class="game" href="/matches/{{ g.id }}">
+  <span class="a{% if g.a_won %} won{% endif %}">{{ g.a }}</span>
+  <span class="pts">{{ g.a_score }} – {{ g.b_score }}</span>
+  <span class="b{% if g.b_won %} won{% endif %}">{{ g.b }}</span>
+  <small>{% if !g.arena.is_empty() %}{{ g.arena }} · {% endif %}{{ g.when }}{% if g.capped %} · tick cap{% endif %}</small>
+</a>

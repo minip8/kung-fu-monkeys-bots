@@ -1,0 +1,45 @@
+<svg class="map" viewBox="0 0 28 16" role="img" aria-label="The orchards arena, 28 by 16 cells: a home zone for each team on the west and east sides, 6 trees (4 bearing every 60 turns, 2 bearing every 90 turns).">
+<rect class="m-floor" width="28" height="16" rx=".4"/>
+<path class="m-grid" d="M1 0V16M2 0V16M3 0V16M4 0V16M5 0V16M6 0V16M7 0V16M8 0V16M9 0V16M10 0V16M11 0V16M12 0V16M13 0V16M14 0V16M15 0V16M16 0V16M17 0V16M18 0V16M19 0V16M20 0V16M21 0V16M22 0V16M23 0V16M24 0V16M25 0V16M26 0V16M27 0V16M0 1H28M0 2H28M0 3H28M0 4H28M0 5H28M0 6H28M0 7H28M0 8H28M0 9H28M0 10H28M0 11H28M0 12H28M0 13H28M0 14H28M0 15H28"/>
+<rect class="m-home0" x="3" y="7" width="3" height="2" rx=".2"/>
+<text class="m-label" x="4.5" y="8.25">home 0</text>
+<rect class="m-home1" x="22" y="7" width="3" height="2" rx=".2"/>
+<text class="m-label" x="23.5" y="8.25">home 1</text>
+<rect class="m-wall" x="9" y="1" width="1" height="2"/>
+<rect class="m-wall" x="13" y="1" width="2" height="1"/>
+<rect class="m-wall" x="18" y="1" width="1" height="2"/>
+<rect class="m-wall" x="6" y="4" width="5" height="1"/>
+<rect class="m-wall" x="17" y="4" width="5" height="1"/>
+<rect class="m-wall" x="8" y="6" width="1" height="2"/>
+<rect class="m-wall" x="13" y="6" width="2" height="4"/>
+<rect class="m-wall" x="19" y="8" width="1" height="2"/>
+<rect class="m-wall" x="6" y="11" width="5" height="1"/>
+<rect class="m-wall" x="17" y="11" width="5" height="1"/>
+<rect class="m-wall" x="9" y="13" width="1" height="2"/>
+<rect class="m-wall" x="18" y="13" width="1" height="2"/>
+<rect class="m-wall" x="13" y="14" width="2" height="1"/>
+<circle class="m-spawn0" cx="1.5" cy="3.5" r=".17"/>
+<circle class="m-spawn1" cx="26.5" cy="3.5" r=".17"/>
+<circle class="m-spawn0" cx="1.5" cy="5.5" r=".17"/>
+<circle class="m-spawn1" cx="26.5" cy="5.5" r=".17"/>
+<circle class="m-spawn0" cx="1.5" cy="7.5" r=".17"/>
+<circle class="m-spawn1" cx="26.5" cy="8.5" r=".17"/>
+<circle class="m-spawn0" cx="1.5" cy="10.5" r=".17"/>
+<circle class="m-spawn1" cx="26.5" cy="10.5" r=".17"/>
+<circle class="m-spawn0" cx="1.5" cy="12.5" r=".17"/>
+<circle class="m-spawn1" cx="26.5" cy="12.5" r=".17"/>
+<path class="m-power" d="M13.5 5.12l.38 .38l-.38 .38l-.38 -.38z"/>
+<path class="m-power" d="M14.5 10.12l.38 .38l-.38 .38l-.38 -.38z"/>
+<circle class="m-tree" cx="11.5" cy="1.5" r="0.43"/>
+<text class="m-beat" x="11.5" y="1.68">60</text>
+<circle class="m-tree" cx="16.5" cy="14.5" r="0.43"/>
+<text class="m-beat" x="16.5" y="14.68">60</text>
+<circle class="m-tree" cx="16.5" cy="1.5" r="0.43"/>
+<text class="m-beat" x="16.5" y="1.68">60</text>
+<circle class="m-tree" cx="11.5" cy="14.5" r="0.43"/>
+<text class="m-beat" x="11.5" y="14.68">60</text>
+<circle class="m-tree" cx="4.5" cy="5.5" r="0.38"/>
+<text class="m-beat" x="4.5" y="5.68">90</text>
+<circle class="m-tree" cx="23.5" cy="10.5" r="0.38"/>
+<text class="m-beat" x="23.5" y="10.68">90</text>
+</svg>

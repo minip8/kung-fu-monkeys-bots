@@ -3,54 +3,227 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}Kung Fu Monkeys ladder{% endblock %}</title>
+<meta name="color-scheme" content="light dark">
+<title>{% block title %}Kung Fu Monkeys bot ladder{% endblock %}</title>
 <style>
-  :root { --fg: #1d1b16; --muted: #6b6457; --bg: #fbf8f1; --card: #fff; --line: #e4ddcd; --accent: #c8761a; --bad: #a8321e; --good: #2f6b2a; }
+  :root {
+    --bg: #f5efe0; --card: #fffdf8; --soft: #efe7d3; --fg: #1d1b14; --muted: #6b6453; --line: #e3d9c2;
+    --head: #16372a; --head-fg: #f3efdf; --head-muted: #a9c2b0;
+    --banana: #f4bb35; --banana-fg: #2b2103; --accent: #9c5700; --bad: #a8321e; --good: #2c6a2a;
+    --t0: #2b74ad; --t1: #c9502c; --t0-soft: #d7e6f2; --t1-soft: #f6ddd2;
+    --floor: #ece3cb; --grid: #ded3b6; --wall: #8c8266; --pit: #2a3a48; --tree: #3d8b46; --power: #8a55c7;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+  }
   @media (prefers-color-scheme: dark) {
-    :root { --fg: #efe9dc; --muted: #a59d8d; --bg: #17150f; --card: #211e17; --line: #3a3428; --accent: #f0a040; --bad: #f08060; --good: #8fcf7f; }
+    :root {
+      --bg: #11130e; --card: #1a1d16; --soft: #22261c; --fg: #ebe6d7; --muted: #a09a86; --line: #30352a;
+      --head: #0c1d15; --head-fg: #f3efdf; --head-muted: #8fae99;
+      --accent: #f2c056; --bad: #f08a6c; --good: #8fcf7f;
+      --t0: #6fb1e3; --t1: #f08a63; --t0-soft: #1c3142; --t1-soft: #43241a;
+      --floor: #262a1f; --grid: #30352a; --wall: #6f6850; --pit: #05080b; --tree: #58b064; --power: #b48cf0;
+    }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
-  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
-  h1 { font-size: 1.6rem; margin: 0 0 4px; }
-  h2 { font-size: 1.15rem; margin: 0 0 12px; }
-  p.sub { color: var(--muted); margin: 0 0 24px; }
-  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 0 0 16px; }
-  table { width: 100%; border-collapse: collapse; font-size: .95rem; }
-  th, td { text-align: left; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
-  th { color: var(--muted); font-weight: 600; }
-  form.inline { display: inline; margin: 0; }
-  form.row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
-  input[type=text], select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); min-width: 0; flex: 1 1 160px; }
-  button, a.button { font: inherit; padding: 6px 12px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; text-decoration: none; display: inline-block; }
-  button.quiet { background: transparent; color: var(--accent); }
-  .error { border-color: var(--bad); color: var(--bad); }
-  .notice { border-color: var(--good); color: var(--good); }
-  code.secret { display: block; padding: 8px; margin: 8px 0; background: var(--bg); border: 1px dashed var(--accent); border-radius: 6px; word-break: break-all; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--fg); background: var(--bg); }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:hover { text-decoration-thickness: 2px; }
+  :focus-visible { outline: 2px solid var(--banana); outline-offset: 2px; border-radius: 4px; }
+  code, pre, kbd { font-family: var(--mono); font-size: .9em; }
+  code { background: var(--soft); padding: 1px 5px; border-radius: 4px; }
+  pre { margin: 0 0 16px; padding: 14px 16px; overflow-x: auto; background: var(--head); color: var(--head-fg); border-radius: 10px; font-size: .84rem; line-height: 1.6; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  pre .c { color: var(--head-muted); }
+
+  /* The page frame. */
+  header.site { background: var(--head); color: var(--head-fg); }
+  header.site .bar { max-width: 1080px; margin: 0 auto; padding: 10px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 22px; }
+  a.brand { display: flex; align-items: center; gap: 10px; color: var(--head-fg); text-decoration: none; font-weight: 800; letter-spacing: -.01em; margin-right: auto; }
+  a.brand svg { width: 28px; height: 28px; flex: none; }
+  a.brand small { display: block; font: 600 .68rem/1.1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--banana); }
+  nav { display: flex; flex-wrap: wrap; gap: 2px; }
+  nav a { color: var(--head-muted); text-decoration: none; font-weight: 600; font-size: .95rem; padding: 6px 11px; border-radius: 999px; }
+  nav a:hover { color: var(--head-fg); background: rgb(255 255 255 / .08); }
+  .pg-home nav a.n-home, .pg-guide nav a.n-guide, .pg-ladder nav a.n-ladder, .pg-games nav a.n-games { color: var(--banana-fg); background: var(--banana); }
+  nav a.ext { color: var(--head-fg); }
+  main { max-width: 1080px; margin: 0 auto; padding: 28px 16px 56px; }
+  .pg-narrow main { max-width: 800px; }
+  footer.site { max-width: 1080px; margin: 0 auto; padding: 18px 16px 40px; border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  footer.site span { margin-right: auto; }
+
+  /* Type. */
+  h1 { font-size: clamp(1.7rem, 4vw, 2.3rem); line-height: 1.12; letter-spacing: -.02em; font-weight: 800; margin: 0 0 8px; overflow-wrap: anywhere; }
+  h2 { font-size: 1.2rem; letter-spacing: -.01em; margin: 0 0 12px; }
+  h3 { font-size: 1rem; margin: 20px 0 6px; }
+  p { margin: 0 0 14px; }
+  p.sub { color: var(--muted); margin: 0 0 24px; max-width: 70ch; }
+  .eyebrow { font: 600 .72rem/1.2 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 0 0 10px; }
   .muted { color: var(--muted); }
+  .good { color: var(--good); }
+  .bad { color: var(--bad); }
+  .small { font-size: .9rem; }
+
+  /* Cards, tables, forms. */
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin: 0 0 18px; }
+  section > :last-child { margin-bottom: 0; }
+  section.error { border-color: var(--bad); color: var(--bad); padding: 12px 16px; }
+  section.notice, div.notice { border-color: var(--good); color: var(--good); }
+  section.notice { padding: 12px 16px; }
+  .head-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin: 0 0 12px; }
+  .head-row h2 { margin: 0 auto 0 0; }
+  table { width: 100%; border-collapse: collapse; font-size: .95rem; }
+  th, td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  tr:last-child > td { border-bottom: 0; }
+  th { color: var(--muted); font: 600 .72rem/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.rank { font: 700 .95rem var(--mono); color: var(--muted); width: 2.5em; }
+  tr.top td.rank { color: var(--accent); }
+  td.team { font-weight: 650; }
+  td.team a { color: inherit; text-decoration: none; }
+  td.team a:hover { text-decoration: underline; }
+  .scroll + p { margin-top: 14px; }
+  .scroll { overflow-x: auto; }
+  form.inline { display: inline; margin: 0; }
+  form.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 0 0; }
+  form.row + p { margin-top: 12px; }
+  input[type=text], select { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); min-width: 0; flex: 1 1 160px; }
+  input[type=file] { font: inherit; min-width: 0; flex: 1 1 200px; }
+  button, a.button { font: inherit; font-weight: 650; padding: 8px 16px; border: 1px solid var(--banana); border-radius: 8px; background: var(--banana); color: var(--banana-fg); cursor: pointer; text-decoration: none; display: inline-block; }
+  button:hover, a.button:hover { filter: brightness(1.06); }
+  button.quiet, a.button.quiet { background: transparent; color: var(--accent); border-color: var(--line); font-weight: 600; }
+  td button, td a.button { padding: 3px 10px; font-size: .9rem; }
+  code.secret { display: block; padding: 10px; margin: 8px 0; background: var(--bg); border: 1px dashed var(--banana); border-radius: 8px; word-break: break-all; color: var(--fg); }
   .signin a.button { margin: 0 8px 8px 0; }
   .team { margin: 0 0 16px; }
-  h3 { font-size: 1rem; margin: 16px 0 6px; }
-  .good { color: var(--good); }
-  input[type=file] { font: inherit; min-width: 0; flex: 1 1 200px; }
-  nav { margin: 0 0 16px; }
-  nav a { margin-right: 16px; color: var(--accent); }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .bad { color: var(--bad); }
-  pre { overflow-x: auto; font-size: .8rem; background: var(--bg); padding: 8px; border-radius: 6px; border: 1px solid var(--line); }
-  .pages a { margin-right: 12px; }
-  .seasons a { margin-right: 12px; }
-  .seasons strong { margin-right: 12px; }
-  .scroll { overflow-x: auto; }
-  footer { margin: 32px 0 0; padding: 12px 0 0; border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem; }
-  footer a { margin-right: 16px; color: var(--accent); }
+  .team > strong { font-size: 1.1rem; }
+  .pages a, .seasons a, .seasons strong { margin-right: 14px; }
+  .pages { margin: 14px 0 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 22px; padding: 0; list-style: none; }
+  .chip { display: inline-block; font: 600 .78rem/1.2 var(--mono); padding: 5px 10px; border-radius: 999px; background: var(--soft); border: 1px solid var(--line); color: var(--fg); white-space: nowrap; }
+  .chip b { color: var(--accent); font-weight: 700; }
+  .t0 { color: var(--t0); }
+  .t1 { color: var(--t1); }
+  .record { display: flex; height: 6px; min-width: 70px; border-radius: 3px; overflow: hidden; background: var(--soft); }
+  .record i { display: block; }
+  .record .w { background: var(--good); }
+  .record .d { background: var(--muted); opacity: .5; }
+  .record .l { background: var(--bad); opacity: .75; }
+
+  /* The landing page. */
+  .hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 28px; align-items: center; background: var(--head); color: var(--head-fg); border-radius: 20px; padding: clamp(22px, 4vw, 44px); margin: 0 0 18px; }
+  .hero h1 { font-size: clamp(2.1rem, 5.4vw, 3.4rem); line-height: 1.02; letter-spacing: -.035em; margin: 0 0 16px; }
+  .hero h1 em { font-style: normal; color: var(--banana); }
+  .hero .eyebrow { color: var(--banana); }
+  .hero p.lede { color: var(--head-muted); font-size: 1.06rem; max-width: 46ch; margin: 0 0 22px; }
+  .hero p.lede strong { color: var(--head-fg); }
+  .hero .cta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .hero .cta a.quiet { color: var(--head-fg); border-color: rgb(255 255 255 / .25); }
+  .hero figure { margin: 0; }
+  .hero figcaption { color: var(--head-muted); font-size: .82rem; margin-top: 8px; }
+  .hero code { background: rgb(255 255 255 / .12); color: var(--head-fg); }
+  .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin: 0 0 18px; }
+  .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin: 0 0 18px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 0 0 18px; }
+  .grid3 > section, .grid2 > section, .grid4 > section { margin: 0; }
+  .step-n { font: 800 .8rem var(--mono); display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--banana); color: var(--banana-fg); margin: 0 0 10px; }
+  .beat h3 { margin: 0 0 4px; font-size: 1.02rem; }
+  .beat p { font-size: .93rem; color: var(--muted); margin: 0; }
+  .game { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); color: var(--fg); text-decoration: none; }
+  .game:last-of-type { border-bottom: 0; }
+  .game:hover .pts { background: var(--banana); color: var(--banana-fg); }
+  .game .a { text-align: right; }
+  .game .a, .game .b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .game .won { font-weight: 750; }
+  .game .pts { font: 700 .92rem var(--mono); padding: 3px 9px; border-radius: 6px; background: var(--soft); white-space: nowrap; }
+  .game small { grid-column: 1 / -1; text-align: center; color: var(--muted); font-size: .78rem; margin-top: -6px; }
+
+  /* A game's scoreboard. */
+  .score { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 12px; align-items: center; text-align: center; background: var(--head); color: var(--head-fg); border-radius: 16px; padding: 22px 16px; margin: 0 0 18px; }
+  .score .side b { display: block; font-size: 1.15rem; overflow-wrap: anywhere; }
+  .score .side small { color: var(--head-muted); font: 600 .72rem var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  .score .pts { font: 800 clamp(2rem, 7vw, 3.2rem)/1 var(--mono); letter-spacing: -.04em; white-space: nowrap; }
+  .score .pts span { color: var(--head-muted); padding: 0 .15em; }
+  .score .won b::after { content: " ★"; color: var(--banana); }
+  .score p { grid-column: 1 / -1; margin: 4px 0 0; color: var(--head-muted); font-size: .9rem; }
+  details > summary { cursor: pointer; font-weight: 650; }
+  details[open] > summary { margin-bottom: 12px; }
+  pre.raw { background: var(--bg); color: var(--fg); border: 1px solid var(--line); font-size: .78rem; }
+
+  /* The guide. */
+  .doc { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 36px; align-items: start; }
+  .toc { position: sticky; top: 16px; font-size: .9rem; max-height: calc(100vh - 32px); overflow-y: auto; }
+  .toc ol { list-style: none; margin: 0; padding: 0; border-left: 2px solid var(--line); }
+  .toc a { display: block; padding: 4px 12px; color: var(--muted); text-decoration: none; margin-left: -2px; border-left: 2px solid transparent; }
+  .toc a:hover { color: var(--fg); border-left-color: var(--banana); }
+  .prose > section { scroll-margin-top: 12px; }
+  .prose h2 { font-size: 1.4rem; margin: 0 0 12px; }
+  .prose h2 .n { font: 700 .8rem var(--mono); color: var(--accent); margin-right: 10px; vertical-align: .15em; }
+  .prose p, .prose li { max-width: 72ch; }
+  .prose ul, .prose ol { margin: 0 0 14px; padding-left: 22px; }
+  .prose li { margin: 0 0 6px; }
+  .prose table { margin: 0 0 16px; }
+  .prose td { vertical-align: top; }
+  .prose table.kv td:first-child { white-space: nowrap; font-weight: 650; }
+  .callout { border-left: 4px solid var(--banana); background: var(--soft); border-radius: 0 10px 10px 0; padding: 12px 16px; margin: 0 0 16px; }
+  .callout > :last-child { margin-bottom: 0; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 0 0 16px; }
+  .fact { background: var(--soft); border-radius: 10px; padding: 12px 14px; }
+  .fact b { display: block; font: 800 1.5rem/1.1 var(--mono); letter-spacing: -.03em; }
+  .fact span { color: var(--muted); font-size: .86rem; }
+  .maps figure { margin: 0 0 22px; }
+  .maps figcaption { font-size: .93rem; color: var(--muted); margin-top: 8px; max-width: 72ch; }
+  .maps figcaption b { color: var(--fg); font-family: var(--mono); }
+  .prose ul.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; list-style: none; padding: 0; margin: 0 0 16px; font-size: .88rem; color: var(--muted); }
+  .legend li { margin: 0; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+
+  /* The arena drawings (tools/contest_maps.py); one unit is one cell. */
+  svg.map { display: block; width: 100%; height: auto; border-radius: 10px; }
+  .m-floor { fill: var(--floor); }
+  .m-grid { stroke: var(--grid); stroke-width: .04; fill: none; }
+  .m-wall { fill: var(--wall); }
+  .m-pit { fill: var(--pit); }
+  .m-home0 { fill: var(--t0-soft); stroke: var(--t0); stroke-width: .08; }
+  .m-home1 { fill: var(--t1-soft); stroke: var(--t1); stroke-width: .08; }
+  .m-spawn0 { fill: var(--t0); }
+  .m-spawn1 { fill: var(--t1); }
+  .m-tree { fill: var(--tree); }
+  .m-power { fill: var(--power); }
+  .m-label { font: 700 .6px system-ui, sans-serif; text-anchor: middle; fill: var(--fg); }
+  .m-beat { font: 700 .5px system-ui, sans-serif; text-anchor: middle; fill: #fff; }
+
+  @media (max-width: 860px) {
+    .hero, .grid2, .doc { grid-template-columns: minmax(0, 1fr); }
+    .grid3 { grid-template-columns: minmax(0, 1fr); }
+    .grid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .toc { position: static; max-height: none; }
+    .toc ol { display: flex; flex-wrap: wrap; border-left: 0; gap: 2px 4px; }
+    .toc a { padding: 3px 8px; border-left: 0; margin-left: 0; background: var(--soft); border-radius: 999px; }
+  }
+  @media (max-width: 480px) {
+    .grid4 { grid-template-columns: minmax(0, 1fr); }
+    section { padding: 16px; }
+    th, td { padding-right: 8px; }
+  }
 </style>
 </head>
-<body>
+<body class="{% block page %}{% endblock %}">
+<header class="site"><div class="bar">
+  <a class="brand" href="/">
+    <svg viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="14" fill="#f4bb35"/><path d="M8.200 6.800c-1.400 6.800 3 13.400 11.600 14c1.300.1 1.900-1 1.200-1.800c-5.200-.800-8.800-5.400-9.300-12c-.1-1.500-3.200-1.600-3.500-.2z" fill="#2b2103"/></svg>
+    <span>Kung Fu Monkeys<small>bot ladder</small></span>
+  </a>
+  <nav aria-label="Site">
+    <a class="n-home" href="/">Home</a>
+    <a class="n-guide" href="/docs/contest">Contest guide</a>
+    <a class="n-ladder" href="/ladder">Ladder</a>
+    <a class="n-games" href="/matches">Games</a>
+    <a class="ext" href="https://kfm.minip8.com">Play the game ↗</a>
+  </nav>
+</div></header>
 <main>
-<nav><a href="/">Portal</a><a href="/ladder">Ladder</a></nav>
 {% block content %}{% endblock %}
-<footer><a href="/privacy">Privacy</a><a href="https://github.com/minip8/kung-fu-monkeys-bots">Source</a></footer>
 </main>
+<footer class="site"><span>Kung Fu Monkeys bot ladder</span><a href="/docs/contest">Contest guide</a><a href="/privacy">Privacy</a><a href="https://github.com/minip8/kung-fu-monkeys-bots">Source</a></footer>
 </body>
 </html>

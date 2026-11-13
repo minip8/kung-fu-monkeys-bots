@@ -2,7 +2,8 @@
 //! as the JSON routes. Forms post urlencoded to `/portal/...`, carry the
 //! session's CSRF token in a `csrf` field and answer 303 back to `/` (with
 //! `?error=<code>` on failure), except token creation, which renders the page
-//! with the secret once. No JavaScript.
+//! with the secret once. No JavaScript. Signed out, `/` is the landing page;
+//! `/docs/contest` is the contest guide.
 
 use askama::Template;
 use axum::extract::multipart::MultipartRejection;
@@ -20,18 +21,30 @@ use uuid::Uuid;
 use crate::auth::{MaybeSession, Session};
 use crate::error::{ApiError, ApiResult, AppError, AppResult, ErrorCode};
 use crate::extract::{ApiPath, FormBody};
-use crate::ladder::{self, LadderQuery, MatchDetail, MatchSummary};
+use crate::ladder::{self, LadderQuery, MatchDetail, MatchSummary, MatchesQuery, Standing};
 use crate::oauth::Provider;
 use crate::tokens::{self, Scope};
 use crate::{manifest, seasons, submissions, teams, users, AppState};
 
 /// The games a team's section lists.
 const RECENT_MATCHES: i64 = 10;
+/// The teams and the games the landing page shows.
+const LANDING_TEAMS: i64 = 5;
+const LANDING_GAMES: i64 = 5;
+/// The games under a season's board.
+const LADDER_GAMES: i64 = 8;
+
+/// The engine release the contest guide (`templates/contest.html`) and the
+/// arena drawings (`templates/maps/`, `tools/contest_maps.py`) describe. A
+/// test holds it to `engine.lock`'s `tag=`, so an engine bump stops here
+/// until the guide has been read against the new release's content.
+pub const CONTEST_GUIDE_ENGINE: &str = "v0.10.0";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(index))
         .route("/privacy", get(privacy))
+        .route("/docs/contest", get(contest))
         .route("/portal/tokens", post(create_token))
         .route("/portal/tokens/{id}/revoke", post(revoke_token))
         .route("/portal/teams", post(create_team))
@@ -133,7 +146,52 @@ struct IndexPage {
     error: Option<String>,
     notice: Option<String>,
     new_token: Option<NewTokenView>,
+    /// What a signed-out visitor sees instead of the account.
+    landing: Option<LandingView>,
     engine_tag: String,
+}
+
+/// The landing page's live parts: the season, the top of its board and its
+/// latest games.
+struct LandingView {
+    season: Option<SeasonLine>,
+    top: Vec<StandingView>,
+    games: Vec<GameLine>,
+    /// The scheduler's round interval in whole minutes (0 under a minute).
+    round_minutes: u64,
+}
+
+/// A recorded game as a list shows it: side A, the score, side B.
+struct GameLine {
+    id: Uuid,
+    when: String,
+    arena: String,
+    a: String,
+    b: String,
+    a_score: i32,
+    b_score: i32,
+    a_won: bool,
+    b_won: bool,
+    ticks: i32,
+    /// The tick cap ended it (a draw).
+    capped: bool,
+}
+
+fn game_line(m: &MatchSummary) -> GameLine {
+    let [a, b] = &m.sides;
+    GameLine {
+        id: m.id,
+        when: when(m.created_at),
+        arena: m.arena.clone().unwrap_or_default(),
+        a: a.name.clone(),
+        b: b.name.clone(),
+        a_score: a.score,
+        b_score: b.score,
+        a_won: m.winner == Some(a.team_id),
+        b_won: m.winner == Some(b.team_id),
+        ticks: m.ticks,
+        capped: m.end == "cap",
+    }
 }
 
 /// A rating change for display: `+12.3`, `-4.0`.
@@ -311,20 +369,42 @@ async fn render(
     notice: Option<String>,
     new_token: Option<NewTokenView>,
 ) -> AppResult<Response> {
-    let user = match session {
-        Some(session) => Some(user_view(state, session).await?),
-        None => None,
+    let (user, landing) = match session {
+        Some(session) => (Some(user_view(state, session).await?), None),
+        None => (None, Some(landing_view(state).await?)),
     };
     let html = IndexPage {
         user,
         error,
         notice,
         new_token,
+        landing,
         engine_tag: state.config.engine_tag.clone(),
     }
     .render()
     .map_err(AppError::internal)?;
     Ok(page_response(StatusCode::OK, html))
+}
+
+async fn landing_view(state: &AppState) -> AppResult<LandingView> {
+    let db = &state.db;
+    let season = ladder::season_param(db, None).await?;
+    let now = seasons::db_now(db).await?;
+    let (top, games) = match &season {
+        Some(s) => (
+            ladder::standings(db, s.id, 1, LANDING_TEAMS).await?.0,
+            ladder::list_matches(db, None, Some(s.id), 1, LANDING_GAMES)
+                .await?
+                .0,
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
+    Ok(LandingView {
+        season: season.as_ref().map(|s| season_line(s, now)),
+        top: top.into_iter().map(standing_view).collect(),
+        games: games.iter().map(game_line).collect(),
+        round_minutes: state.config.round_seconds / 60,
+    })
 }
 
 #[derive(Deserialize)]
@@ -589,8 +669,18 @@ struct SeasonLink {
     selected: bool,
 }
 
+fn season_line(s: &seasons::Season, now: OffsetDateTime) -> SeasonLine {
+    SeasonLine {
+        name: s.name.clone(),
+        mode: s.mode.clone(),
+        window: format!("{} to {}", when(s.starts_at), when(s.ends_at)),
+        current: s.holds(now),
+    }
+}
+
 struct StandingView {
     rank: i64,
+    team_id: Uuid,
     name: String,
     rating: i64,
     rd: i64,
@@ -601,6 +691,24 @@ struct StandingView {
     hash: String,
 }
 
+fn standing_view(r: Standing) -> StandingView {
+    StandingView {
+        rank: r.rank,
+        team_id: r.team_id,
+        name: r.name,
+        rating: r.rating,
+        rd: r.rd,
+        games: r.games,
+        wins: r.wins,
+        draws: r.draws,
+        losses: r.losses,
+        hash: r
+            .module_hash
+            .map(|h| h.chars().take(12).collect())
+            .unwrap_or_default(),
+    }
+}
+
 #[derive(Template)]
 #[template(path = "ladder.html")]
 struct LadderPage {
@@ -608,6 +716,10 @@ struct LadderPage {
     season: Option<SeasonLine>,
     seasons: Vec<SeasonLink>,
     rows: Vec<StandingView>,
+    /// The season's latest games, under the board.
+    games: Vec<GameLine>,
+    /// The season's page of `/matches`.
+    games_url: String,
     prev: Option<String>,
     next: Option<String>,
     engine_tag: String,
@@ -618,7 +730,7 @@ fn encode(text: &str) -> String {
 }
 
 /// `GET /ladder` for a browser: the board of a season, paged, with links to
-/// the other seasons.
+/// the other seasons and the season's latest games.
 pub async fn ladder_page(state: &AppState, query: &LadderQuery) -> AppResult<Response> {
     let page = ladder::page_param(query.page.as_deref())?;
     let season = ladder::season_param(&state.db, query.season.as_deref()).await?;
@@ -627,6 +739,14 @@ pub async fn ladder_page(state: &AppState, query: &LadderQuery) -> AppResult<Res
     let (rows, more) = match &season {
         Some(s) => ladder::standings(&state.db, s.id, page, ladder::LADDER_PAGE).await?,
         None => (Vec::new(), false),
+    };
+    let games = match &season {
+        Some(s) => {
+            ladder::list_matches(&state.db, None, Some(s.id), 1, LADDER_GAMES)
+                .await?
+                .0
+        }
+        None => Vec::new(),
     };
     let link = |p: i64| {
         let mut url = format!("/ladder?page={p}");
@@ -648,29 +768,13 @@ pub async fn ladder_page(state: &AppState, query: &LadderQuery) -> AppResult<Res
                 selected: season.as_ref().is_some_and(|c| c.id == s.id),
             })
             .collect(),
-        season: season.as_ref().map(|s| SeasonLine {
-            name: s.name.clone(),
-            mode: s.mode.clone(),
-            window: format!("{} to {}", when(s.starts_at), when(s.ends_at)),
-            current: s.holds(now),
-        }),
-        rows: rows
-            .into_iter()
-            .map(|r| StandingView {
-                rank: r.rank,
-                name: r.name,
-                rating: r.rating,
-                rd: r.rd,
-                games: r.games,
-                wins: r.wins,
-                draws: r.draws,
-                losses: r.losses,
-                hash: r
-                    .module_hash
-                    .map(|h| h.chars().take(12).collect())
-                    .unwrap_or_default(),
-            })
-            .collect(),
+        season: season.as_ref().map(|s| season_line(s, now)),
+        rows: rows.into_iter().map(standing_view).collect(),
+        games: games.iter().map(game_line).collect(),
+        games_url: season.as_ref().map_or_else(
+            || "/matches".to_owned(),
+            |s| format!("/matches?season={}", encode(&s.name)),
+        ),
         prev: (page > 1).then(|| link(page - 1)),
         next: more.then(|| link(page + 1)),
         engine_tag: state.config.engine_tag.clone(),
@@ -682,7 +786,10 @@ pub async fn ladder_page(state: &AppState, query: &LadderQuery) -> AppResult<Res
 
 struct SideView {
     label: &'static str,
+    /// The team's name with the mode's team index it played.
     name: String,
+    team_name: String,
+    team: i16,
     won: bool,
     score: i32,
     kills: i32,
@@ -704,6 +811,8 @@ struct MatchPage {
     outcome: String,
     ending: &'static str,
     sides: Vec<SideView>,
+    score_a: i32,
+    score_b: i32,
     replay_url: Option<String>,
     viewer_url: Option<String>,
     seed: i64,
@@ -768,6 +877,8 @@ pub fn match_page(detail: &MatchDetail) -> AppResult<Response> {
             .map(|(s, label)| SideView {
                 label,
                 name: format!("{} (team {})", s.name, s.team),
+                team_name: s.name.clone(),
+                team: s.team,
                 won: m.winner == Some(s.team_id),
                 score: s.score,
                 kills: s.kills,
@@ -780,6 +891,8 @@ pub fn match_page(detail: &MatchDetail) -> AppResult<Response> {
                     .unwrap_or_default(),
             })
             .collect(),
+        score_a: m.sides[0].score,
+        score_b: m.sides[1].score,
         replay_url: detail.replay_url.clone(),
         viewer_url: detail.viewer_url.clone(),
         seed: m.seed,
@@ -787,6 +900,93 @@ pub fn match_page(detail: &MatchDetail) -> AppResult<Response> {
         content_hash: detail.content_hash.clone(),
         build_hash: detail.build_hash.clone().unwrap_or_default(),
         result: serde_json::to_string_pretty(&detail.result).map_err(AppError::internal)?,
+    }
+    .render()
+    .map_err(AppError::internal)?;
+    Ok(page_response(StatusCode::OK, html))
+}
+
+#[derive(Template)]
+#[template(path = "matches.html")]
+struct MatchesPage {
+    title: String,
+    /// The team whose games these are, when `?team=` names one.
+    team: Option<String>,
+    season: Option<String>,
+    /// Whether a team or a season narrows the list.
+    filtered: bool,
+    games: Vec<GameLine>,
+    prev: Option<String>,
+    next: Option<String>,
+}
+
+/// `GET /matches` for a browser: recorded games, newest first, paged, of
+/// every team and season unless the query narrows it.
+pub async fn matches_page(state: &AppState, query: &MatchesQuery) -> AppResult<Response> {
+    let filter = ladder::matches_filter(&state.db, query).await?;
+    let (matches, more) = ladder::list_matches(
+        &state.db,
+        filter.team,
+        filter.season.as_ref().map(|s| s.id),
+        filter.page,
+        ladder::MATCH_PAGE,
+    )
+    .await?;
+    let team = match filter.team {
+        Some(id) => teams::team_name(&state.db, id).await?,
+        None => None,
+    };
+    let link = |p: i64| {
+        let mut url = format!("/matches?page={p}");
+        if let Some(id) = filter.team {
+            url.push_str(&format!("&team={id}"));
+        }
+        if let Some(s) = &filter.season {
+            url.push_str("&season=");
+            url.push_str(&encode(&s.name));
+        }
+        url
+    };
+    let html = MatchesPage {
+        title: team
+            .as_ref()
+            .map_or_else(|| "Games".to_owned(), |name| format!("Games of {name}")),
+        filtered: filter.team.is_some() || filter.season.is_some(),
+        team,
+        season: filter.season.as_ref().map(|s| s.name.clone()),
+        games: matches.iter().map(game_line).collect(),
+        prev: (filter.page > 1).then(|| link(filter.page - 1)),
+        next: more.then(|| link(filter.page + 1)),
+    }
+    .render()
+    .map_err(AppError::internal)?;
+    Ok(page_response(StatusCode::OK, html))
+}
+
+#[derive(Template)]
+#[template(path = "contest.html")]
+struct ContestPage {
+    /// The release the guide was written for.
+    guide_tag: &'static str,
+    /// The release the service plays.
+    engine_tag: String,
+    /// Whether the two differ: the page says so.
+    stale: bool,
+    round_minutes: u64,
+    round_opponents: usize,
+    replay_hours: u64,
+}
+
+/// `GET /docs/contest` (auth: none): the contest guide.
+async fn contest(State(state): State<AppState>) -> AppResult<Response> {
+    let config = &state.config;
+    let html = ContestPage {
+        guide_tag: CONTEST_GUIDE_ENGINE,
+        stale: config.engine_tag != CONTEST_GUIDE_ENGINE,
+        engine_tag: config.engine_tag.clone(),
+        round_minutes: config.round_seconds / 60,
+        round_opponents: config.round_opponents,
+        replay_hours: config.replay_hours,
     }
     .render()
     .map_err(AppError::internal)?;
@@ -832,4 +1032,26 @@ async fn privacy(State(state): State<AppState>) -> AppResult<Response> {
     .render()
     .map_err(AppError::internal)?;
     Ok(page_response(StatusCode::OK, html))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CONTEST_GUIDE_ENGINE;
+
+    /// The guide names the engine release it was written for; the pin moving
+    /// on is the moment to read it (and redraw the maps) against the new one.
+    #[test]
+    fn the_contest_guide_is_for_the_pinned_engine() {
+        let lock = include_str!("../../engine.lock");
+        let tag = lock
+            .lines()
+            .find_map(|line| line.strip_prefix("tag="))
+            .expect("engine.lock has a tag= line");
+        assert_eq!(
+            tag, CONTEST_GUIDE_ENGINE,
+            "engine.lock moved: read service/templates/contest.html against the new release's \
+             content/modes.toml and docs/bot-abi.md, run tools/contest_maps.py, then set \
+             CONTEST_GUIDE_ENGINE"
+        );
+    }
 }
