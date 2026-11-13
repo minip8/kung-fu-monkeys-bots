@@ -1,4 +1,4 @@
-/* kfm_bot.h: the Kung Fu Monkeys bot SDK for C, bot ABI and Observation v1.
+/* kfm_bot.h: the Kung Fu Monkeys bot SDK for C, bot ABI and Observation v2.
  *
  * One dependency-free C11 header (freestanding: <stdint.h> and <stddef.h>
  * only, no libc). Copy it into a bot project. The normative ABI is
@@ -60,8 +60,13 @@ extern "C" {
 
 /* ---- ABI constants -------------------------------------------------------- */
 
-#define KFM_ABI_VERSION 1u /* kfm_abi_version() and header.version */
-#define KFM_OBS_SIZE 5748u /* sizeof(kfm_observation) and header.size */
+/* Version 2 (architecture v0.80) is version 1 with the `zones` block appended:
+   nothing of version 1 moved. A host that speaks 2 still runs a module built
+   against version 1 (it writes it version 1's 5748 bytes under a version 1
+   header and nothing past them); a module built with this header is version
+   2 and needs a host that speaks 2. */
+#define KFM_ABI_VERSION 2u /* kfm_abi_version() and header.version */
+#define KFM_OBS_SIZE 5880u /* sizeof(kfm_observation) and header.size */
 
 /* Capacities (a change is a new ABI version). */
 #define KFM_MAX_PLAYERS 10
@@ -77,9 +82,31 @@ extern "C" {
 #define KFM_MODE_DATA_WORDS 16
 /* v0.69: match.modeData[KFM_ZONE_WORD + 4k .. +3] is the arena's zone k
    (k < KFM_ZONES) as the closed box minX, minY, maxX, maxY (Q16.16, as
-   int32_t), all zero when the arena has no zone k. Zone 0 is the hill. */
+   int32_t), all zero when the arena has no zone k. Zone 0 is the hill.
+   Version 2 still fills them. */
 #define KFM_ZONE_WORD 8
 #define KFM_ZONES 2
+/* v0.80 (version 2): every zone of the arena, zones 0 and 1 included, is in
+   observation.zones. */
+#define KFM_MAX_ZONES 8
+/* v0.80, the control mode's state in match.modeData (bot-abi.md §3):
+   words 0-1 the teams' clocks (u16 each, team 2w low, 2w+1 high), word
+   KFM_CONTROL_OWNER_WORD the owners and KFM_CONTROL_CHALLENGER_WORD the
+   challengers (4 bits per zone, zone k in bits 4k..4k+3, the team + 1, 0 =
+   nobody), words KFM_CONTROL_PROGRESS_WORD.. the capture progress (u16 per
+   zone, zone k in word + k/2, the low half for an even k). The kind plays
+   at most 4 teams and KFM_MAX_ZONES zones. */
+#define KFM_CONTROL_OWNER_WORD 2
+#define KFM_CONTROL_CHALLENGER_WORD 3
+#define KFM_CONTROL_PROGRESS_WORD 4
+/* v0.82, the harvest mode's state in match.modeData (bot-abi.md §3): word
+   KFM_HARVEST_BEATS_WORD holds the two beats, bank_ticks in the low half and
+   steal_ticks (0 = no stealing) in the high half; every other word 0-7 is 0.
+   Team t's home is zone t (observation.zones, or modeData words 8-15 for
+   zones 0 and 1); the cargo is self.ammo, up to self.ammoMax. */
+#define KFM_HARVEST_BEATS_WORD 0
+#define KFM_HARVEST_BANK_TICKS(word) ((uint32_t)(word) & 0xFFFFu)
+#define KFM_HARVEST_STEAL_TICKS(word) ((uint32_t)(word) >> 16)
 
 #define KFM_NO_SLOT 0xFFu        /* a slot field naming no player */
 #define KFM_NO_APPROACH 0xFFFFu  /* banana.approachTicks while self is not alive */
@@ -110,7 +137,9 @@ enum {
   KFM_MODE_TEAM_ROUNDS = 3,
   KFM_MODE_TEAM_DEATHMATCH = 4,
   KFM_MODE_HILL = 5,
-  KFM_MODE_CAPTURE = 6
+  KFM_MODE_CAPTURE = 6,
+  KFM_MODE_CONTROL = 7, /* architecture v0.80 */
+  KFM_MODE_HARVEST = 8  /* architecture v0.82: bank bananas in the home zone */
 };
 enum {
   KFM_ABILITY_NONE = 0,
@@ -159,15 +188,15 @@ enum {
 /* heardCalls[i].cellX/cellY of a caller this bot does not see. */
 #define KFM_NO_CELL (-1)
 
-/* ---- Observation v1 --------------------------------------------------------
- * Little-endian, 5748 bytes, alignment 4, every hole an explicit pad. Units:
+/* ---- Observation v2 --------------------------------------------------------
+ * Little-endian, 5880 bytes, alignment 4, every hole an explicit pad. Units:
  * Q16.16 (int32 / 65536: arena units, units per tick for speeds), angle8
  * (uint8 1/256 turn, 0 = +x, counter-clockwise), bam (uint16 1/65536 turn),
  * ticks (60 per second), slot (0..9, 0xFF none). Field meanings: bot-abi.md §2. */
 
 typedef struct kfm_obs_header {
-  uint32_t version; /* 1 */
-  uint32_t size;    /* 5748 */
+  uint32_t version; /* 2 */
+  uint32_t size;    /* 5880 */
   uint32_t schemaFlags, reserved0;
 } kfm_obs_header;
 
@@ -297,10 +326,13 @@ typedef struct kfm_obs_hazard {
   uint8_t pad0, pad1, pad2;
 } kfm_obs_hazard;
 
+/* A power-up spawner, or (v0.82, tree 1) a tree: on the same beat it lays one
+   banana pickup on its cell while fewer than maxAlive bananas lie there. */
 typedef struct kfm_obs_spawner {
   kfm_obs_point pos;
   uint16_t powerUpSet, firstTicks, intervalTicks;
-  uint8_t maxAlive, pad0;
+  uint8_t maxAlive;
+  uint8_t tree; /* v0.82 (was pad0, always 0): 1 a tree, 0 a power-up spawner */
 } kfm_obs_spawner;
 
 typedef struct kfm_obs_arena {
@@ -321,6 +353,21 @@ typedef struct kfm_obs_heard_call {
   int16_t cellX, cellY;
 } kfm_obs_heard_call;
 
+/* v0.80 (version 2): an objective zone, the closed box in Q16.16. */
+typedef struct kfm_obs_zone {
+  int32_t minX, minY;
+  int32_t maxX, maxY;
+} kfm_obs_zone;
+
+/* v0.80 (version 2): the arena's zones in content order (zone 0 is the hill,
+   a capture team t's home is zone t, control plays them all); entries past
+   `count` are zero. Fog never hides them. */
+typedef struct kfm_obs_zones {
+  uint8_t count;
+  uint8_t pad0[3];
+  kfm_obs_zone zone[KFM_MAX_ZONES];
+} kfm_obs_zones;
+
 typedef struct kfm_observation {
   kfm_obs_header header;
   kfm_obs_match match;
@@ -331,6 +378,7 @@ typedef struct kfm_observation {
   kfm_obs_pickup pickups[KFM_MAX_PICKUPS];
   kfm_obs_arena arena;
   kfm_obs_heard_call heardCalls[KFM_MAX_HEARD_CALLS]; /* oldest first */
+  kfm_obs_zones zones; /* version 2: every zone of the arena */
 } kfm_observation;
 
 #define KFM_CHECK_SIZE(T, n) KFM_STATIC_ASSERT(sizeof(T) == (n), "size of " #T)
@@ -348,6 +396,8 @@ KFM_CHECK_SIZE(kfm_obs_hazard, 24);
 KFM_CHECK_SIZE(kfm_obs_spawner, 16);
 KFM_CHECK_SIZE(kfm_obs_arena, 1116);
 KFM_CHECK_SIZE(kfm_obs_heard_call, 12);
+KFM_CHECK_SIZE(kfm_obs_zone, 16);
+KFM_CHECK_SIZE(kfm_obs_zones, 132);
 KFM_CHECK_SIZE(kfm_observation, KFM_OBS_SIZE);
 KFM_CHECK_AT(kfm_observation, match, 16);
 KFM_CHECK_AT(kfm_observation, rules, 184);
@@ -357,6 +407,7 @@ KFM_CHECK_AT(kfm_observation, bananas, 1112);
 KFM_CHECK_AT(kfm_observation, pickups, 3928);
 KFM_CHECK_AT(kfm_observation, arena, 4440);
 KFM_CHECK_AT(kfm_observation, heardCalls, 5556);
+KFM_CHECK_AT(kfm_observation, zones, 5748);
 KFM_CHECK_AT(kfm_obs_match, modeIndex, 16);
 KFM_CHECK_AT(kfm_obs_match, presentMask, 24);
 KFM_CHECK_AT(kfm_obs_match, inputDelayTicks, 28);
@@ -405,6 +456,7 @@ KFM_CHECK_AT(kfm_obs_hazard, speedMul, 16);
 KFM_CHECK_AT(kfm_obs_hazard, kind, 20);
 KFM_CHECK_AT(kfm_obs_spawner, powerUpSet, 8);
 KFM_CHECK_AT(kfm_obs_spawner, maxAlive, 14);
+KFM_CHECK_AT(kfm_obs_spawner, tree, 15);
 KFM_CHECK_AT(kfm_obs_arena, spawnPointCount, 8);
 KFM_CHECK_AT(kfm_obs_arena, spawnPoints, 12);
 KFM_CHECK_AT(kfm_obs_arena, walls, 92);
@@ -412,6 +464,8 @@ KFM_CHECK_AT(kfm_obs_arena, hazards, 604);
 KFM_CHECK_AT(kfm_obs_arena, spawners, 988);
 KFM_CHECK_AT(kfm_obs_heard_call, tick, 4);
 KFM_CHECK_AT(kfm_obs_heard_call, cellX, 8);
+KFM_CHECK_AT(kfm_obs_zones, zone, 4);
+KFM_CHECK_AT(kfm_obs_zone, maxY, 12);
 #undef KFM_CHECK_SIZE
 #undef KFM_CHECK_AT
 

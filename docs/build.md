@@ -174,11 +174,11 @@ the ladder ranks.
 
 `engine.lock` holds two flat `key=value` lines that the tools read:
 
-- `commit=`: the full engine commit (today `3d16a96`, the engine's v0.9.0) whose `tools/bots/sdk-c/kfm_bot.h`
+- `commit=`: the full engine commit (today `6e62683`, the engine's v0.10.0) whose `tools/bots/sdk-c/kfm_bot.h`
   `sdk/c/kfm_bot.h` copies byte for byte; `sdk/c/ENGINE_SOURCE.txt` names the same commit.
   `tools/check_header.sh` diffs the two (from `.kfm/engine` when that clone is at the commit,
   else from raw.githubusercontent.com) and exits 1 on any difference.
-- `tag=`: the engine release whose `kfm_arena` plays the examples. `v0.9.0` today (the
+- `tag=`: the engine release whose `kfm_arena` plays the examples. `v0.10.0` today (the
   engine's release workflow has published `kfm_arena` assets since v0.5.0).
 
 There are two ways to get a `kfm_arena`, both into `.kfm/` (ignored by git):
