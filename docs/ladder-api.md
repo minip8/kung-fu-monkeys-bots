@@ -1,15 +1,17 @@
-# Kung Fu Monkeys ladder API v1.5
+# Kung Fu Monkeys ladder API v1.6
 
 Status: normative, append-only from v1.0 (2026-11-07, M7 step 3a, engine architecture v0.63);
 v1.1 (2026-11-07, M7 step 3b) serves submissions; v1.2 (2026-11-07, M7 step 4) serves seasons,
 the scheduler's matches, the ratings and the ladder (§10); v1.3 (2026-11-07, M7 step 5) serves
 the `kfm` CLI's login (§5.1); v1.4 (2026-11-07) keeps replays for 24 hours (§10.6), limits
 the routes that presign per client (§2) and serves the privacy page (§8); v1.5 (2026-11-11,
-engine architecture v0.78) holds an account to one team, an operator's excepted (§7).
+engine architecture v0.78) holds an account to one team, an operator's excepted (§7); v1.6
+(2026-11-13, engine architecture v0.83) plays a pair as one game on an arena and sides drawn
+from its seed, and names a game's arena (§10.3, §10.6).
 The design and its rationale are the engine's `docs/architecture.md` §8 "The ladder" and §11
 "M7 step 3 design". This file is the HTTP surface shared by the service (`service/`, the
 `kfm-ladder` binary), its portal and the `kfm` command line tool; change it here first. Every
-route below is served as of v1.5.
+route below is served as of v1.6.
 
 ## 1. Transport and conventions
 
@@ -616,7 +618,8 @@ Rounds are numbered from 1 within a season. A round:
 4. queues one `match` job per new pair, side A the higher ranked, with the seed: the first 8
    bytes of SHA-256 over `kfm-ladder match seed v1\0`, the season id's 16 bytes, the round
    number (big-endian i32) and the two submission ids' bytes (A's first), read big-endian and
-   shifted right by 2, so it is below 2^62 and the second game's seed (+1) fits as well.
+   shifted right by 2, so it is below 2^62. The game's arena and sides are drawn from it too
+   (§10.3, v1.6).
 
 ### 10.3 The match job
 
@@ -625,14 +628,29 @@ store (checked against their recorded SHA-256), and runs the season's released `
 once, in a fresh directory holding the modules as `<submission>.wasm`:
 
 ```
-kfm_arena --mode <season's mode> --team A,A,A,A,A --team B,B,B,B,B --matches 2 --rotate
+kfm_arena --mode <season's mode> --arena <arena> --team X,X,X,X,X --team Y,Y,Y,Y,Y --matches 1
   --seed <seed> --ticks <KFM_LADDER_MATCH_TICKS> --json --result result.jsonl --replay-dir replays --quiet
 ```
 
 Each side's module fills all five slots of its team (the contest is 5v5; `--team` takes one
-spec per slot). `--rotate` makes the second game swap the sides, so one run plays the pair from
-both sides: two **games**, each recorded as one match (game 0 with seed S, game 1 with S + 1).
-Per game the worker reads the match object of the engine's `docs/arena-result.md`, stores its
+spec per slot). A pair plays one **game**, recorded as one match (v1.6; before, two games from
+both sides through `--matches 2 --rotate`, which on a mode with an arena pool never left the
+pool's first arena). The arena and the sides are **drawn from the seed**: with D the SHA-256
+over `kfm-ladder match draw v1\0` and the seed's 8 bytes (big-endian),
+
+- the lowest bit of D's byte 0 is the team index side A plays: 0, and X is A's module (the
+  first `--team` plays the mode's team 0); 1, and X is B's;
+- D's bytes 8 to 15, read big-endian, modulo the number of arenas in the mode's pool, index the
+  arena in the pool's content order.
+
+The pool is the engine's content, not the service's configuration: a worker asks its runner
+once per mode, by playing 32 one-tick matches of reference bots without `--arena` and reading
+the `arena` key of their match objects (`kfm_arena` cycles a pool, two matches a member, and
+plays a mode without a pool on its one arena). A runner whose match objects carry no `arena`
+(an engine release before v0.10.0) is given no `--arena` and plays the arena it would have. So
+over the games of a season a team meets every arena from either side about equally often, a
+single game is as random as a coin and a die, and the draw is the same on every attempt of a
+job. The worker reads the match object of the engine's `docs/arena-result.md`, stores its
 replay at `replays/<match>.kfmr`, and in one transaction inserts the match and updates both
 teams' ratings (§10.4) and both submissions' `ranked_games` and `ranked_faults`.
 
@@ -642,10 +660,11 @@ not null) is recorded on the match (the side's `faults`) and counted on the subm
 which passed validation (§9.6), and the game counts as played: the engine substituted "repeat
 last input" for the faulty ticks, which is the bot's loss to bear.
 
-`kfm_arena` exiting non-zero, or leaving no result, no summary line, not exactly games 0 and 1
-or a replay missing, fails the attempt; the job is retried like any other (three attempts in
-all). A game already recorded by an earlier attempt is never recorded again (one row per job
-and game), and the run is deterministic, so a retry records what the first attempt would have.
+`kfm_arena` exiting non-zero (the pool's probe included), or leaving no result, no summary
+line, not exactly game 0, side A on another team than the drawn one or a replay missing, fails
+the attempt; the job is retried like any other (three attempts in all). A game already recorded
+by an earlier attempt is never recorded again (one row per job and game), and the draw and the
+run are deterministic, so a retry records what the first attempt would have.
 A job that starts after its season's end records nothing. A pair whose job failed for good is
 simply paired again in a later round.
 
@@ -704,7 +723,7 @@ match object:
 | `id` | id | always | |
 | `season`, `season_id` | string, id | always | Its season. |
 | `round` | number | always | The scheduler's round number in the season. |
-| `game` | number | always | 0 or 1: the game of its pair's run (1 has the sides swapped). |
+| `game` | number | always | The game of its pair's run: 0 since v1.6 (a pair is one game); before, 0 or 1 (1 had the sides swapped). |
 | `created_at` | time | always | When it was recorded. |
 | `engine_tag` | string | always | The engine release it ran under (`v0.5.1`): re-run it with that release's `kfm_arena`. |
 | `seed` | number | always | The game's world seed (`--seed`). |
@@ -718,6 +737,7 @@ match object:
 | `sides[].score`, `kills`, `deaths` | number | always | The side's `teams[]` entry in the result. |
 | `sides[].faults` | array | always | One `{"slot","traps","over","bad","dead"}` per faulty module slot of the side (§10.3); empty when clean. |
 | `sides[].rating_change` | number | always | The side's rating change from this game, to a tenth. |
+| `arena` | string or null | always | The arena it was played on (v1.6), as its result names it: re-run it with `--arena`. `null` for a game played with an engine release before v0.10.0, whose result names none. |
 
 `GET /matches/{m}`: `200`, the match object plus:
 
@@ -768,6 +788,7 @@ presigned URL, so the bucket must allow that origin's GET (CORS, `deploy/README.
 | v1.3 | The `kfm` CLI's login (§5.1): `GET /auth/cli`, `POST /auth/cli`, `POST /auth/cli/exchange`; a sign-in start's `?next=` (the CLI page only); the code `invalid_code`; `DELETE /tokens/{id}` with that token as the bearer (a token revokes itself); `GET /seasons`' `engine_tag`. |
 | v1.4 | Replay retention (§10.6): a game's replay is deleted 24 hours after it was recorded (`KFM_LADDER_REPLAY_HOURS`), after which its `replay_url` and `viewer_url` are `null`; the match row stays. The presigning limit (§2): `GET /matches/{m}` and `GET /submissions/{s}` answer `429 rate_limited` with `Retry-After` past 60 requests a minute per client IP (`KFM_LADDER_PRESIGN_PER_MINUTE`, `KFM_LADDER_TRUST_PROXY`). The round interval's default becomes 1800 seconds (§10.2). The portal's `GET /privacy` page (§8). The production origin is `https://bots.kfm.minip8.com`. |
 | v1.5 | One team per account (§7): `POST /teams` and `POST /teams/{id}/members` refuse a second membership with the new code `already_in_team` (a rule tightened, no route or key changed; memberships from before stay); operators, set by `kfm-ladder operator add|remove|list` on the VM, are excepted and own the house teams; `GET /me` gains `operator`; the portal shows the create-team form only to an account that may use it. |
+| v1.6 | A pair is one game (§10.3): the match job runs `--matches 1` on an arena of the mode's pool and with the sides drawn from the job's seed, where it ran `--matches 2 --rotate` (both sides, always the pool's first arena); the worker asks the runner for the pool. A match object gains `arena` (§10.6); its `game` is 0 from here on. No route changed; games recorded before keep their `game` 0 or 1. |
 
 ## 12. Configuration of the binary
 

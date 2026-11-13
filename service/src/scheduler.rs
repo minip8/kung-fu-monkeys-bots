@@ -6,9 +6,9 @@
 //! walk from the top ([`pair`]). A team takes part in at most k pairs, so a
 //! round of n teams has at most n·k/2. A pair whose match is still queued or
 //! running counts as paired (it will produce a result) but gets no new job.
-//! Each new pair is one `match` job, played from both sides through
-//! `--rotate`, with a seed derived from the season, the round number and the
-//! two submissions.
+//! Each new pair is one `match` job, one game on an arena and sides the
+//! match worker draws from its seed, which is derived from the season, the
+//! round number and the two submissions.
 //!
 //! `kfm-ladder serve` runs [`run`] in the background: it holds a Postgres
 //! session advisory lock ([`LOCK_KEY`], `pg_try_advisory_lock`) on a
@@ -20,8 +20,8 @@
 //! season, and fewer than two eligible teams make no round.
 //!
 //! The default interval is 30 minutes: every game writes a replay to the
-//! object store, and a round every 5 minutes with 20 teams (30 pairs, 60
-//! games) wrote 17 k replays a day.
+//! object store, and a round every 5 minutes with 20 teams (30 pairs of
+//! two games each, before a pair became one game) wrote 17 k replays a day.
 //!
 //! The lock holder also sweeps old replays ([`crate::retention::prune_replays`])
 //! every [`crate::retention::REPLAY_SWEEP_EVERY`] over the same connection,
@@ -172,8 +172,9 @@ pub fn pair(entrants: &[Entrant], k: usize, busy: &HashSet<(Uuid, Uuid)>) -> Vec
 
 /// A match's seed: the first 8 bytes of SHA-256 over a fixed label, the
 /// season, the round number and the two submissions (side A's first), as a
-/// big-endian integer shifted right by 2, so it is below 2^62 and the
-/// second game's seed (`--seed` + 1 in kfm_arena) still fits a bigint.
+/// big-endian integer shifted right by 2, so it is below 2^62 and fits a
+/// bigint with room to spare. The match worker also draws the game's arena
+/// and sides from it ([`crate::match_worker::draw`]).
 pub fn seed(season: Uuid, round: i32, submission_a: Uuid, submission_b: Uuid) -> i64 {
     let mut hash = Sha256::new();
     hash.update(b"kfm-ladder match seed v1\0");

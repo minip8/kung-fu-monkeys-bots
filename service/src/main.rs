@@ -102,8 +102,8 @@ enum WorkerRole {
     /// Claim build and validate jobs: a submission's source into a module in
     /// the sandbox, then the module's checks and its smoke match.
     Build,
-    /// Claim match jobs: one kfm_arena run of a pair from both sides, its
-    /// two games recorded with their replays and the ratings updated.
+    /// Claim match jobs: one kfm_arena run of a pair on a drawn arena and
+    /// sides, its game recorded with its replay and the ratings updated.
     Match,
 }
 

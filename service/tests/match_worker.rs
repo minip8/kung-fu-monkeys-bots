@@ -1,7 +1,8 @@
 //! The match job end to end with the released kfm_arena: a scheduler round's
-//! pair played from both sides, two rows, the replays in the store, the
-//! ratings moved, faults recorded (never a rejection), the release widening,
-//! retries that record nothing twice, and the jobs that record nothing.
+//! pair played as one game on the arena and sides its seed draws, one row,
+//! the replay in the store, the ratings moved, faults recorded (never a
+//! rejection), the release widening, retries that record nothing twice, and
+//! the jobs that record nothing.
 //!
 //! Needs Postgres (DATABASE_URL), a MinIO (KFM_LADDER_TEST_S3_ENDPOINT),
 //! kfm_arena (KFM_LADDER_ARENA, default ../.kfm/kfm_arena) and the example
@@ -16,7 +17,7 @@ use std::time::Duration;
 
 use common::{db_ready_bot, db_season, db_team, have_store, start, TestApp};
 use kfm_ladder::glicko::{self, Rating};
-use kfm_ladder::match_worker::{MatchSettings, MatchWorker};
+use kfm_ladder::match_worker::{draw, Draw, MatchSettings, MatchWorker};
 use kfm_ladder::scheduler::{self, MatchPayload, RoundOutcome};
 use kfm_ladder::worker::{self, Timing};
 use serde_json::Value;
@@ -42,6 +43,25 @@ fn example(name: &str) -> PathBuf {
 /// A module that passes every load check and traps on every act: what a
 /// ranked bot that breaks under a new release looks like.
 const TRAPPING: &str = "0061736d01000000010f036000017f60027e7f0060017f017e030504000001020503010001074205066d656d6f727902000f6b666d5f6162695f76657273696f6e00000e6b666d5f6f62735f6275666665720001086b666d5f696e69740002076b666d5f61637400030a1304040041010b05004180080b02000b0300000b";
+
+/// The contest's arena pool in the pinned engine release (engine.lock,
+/// v0.10.0), which the worker asks the runner for.
+fn contest_pool() -> Vec<String> {
+    ["grove", "orchards", "gorge", "burrows"]
+        .map(str::to_owned)
+        .to_vec()
+}
+
+/// What the worker draws for `seed`. A runner from before the `arena` key
+/// names no pool, so only the side is drawn there.
+fn drawn(seed: i64, raw: &Value) -> Draw {
+    let pool = if raw.get("arena").is_some() {
+        contest_pool()
+    } else {
+        Vec::new()
+    };
+    draw(u64::try_from(seed).unwrap(), &pool)
+}
 
 fn have_runner(test: &str) -> bool {
     if !have_store(test) {
@@ -203,8 +223,8 @@ async fn rating(pool: &PgPool, season: Uuid, team: Uuid) -> RatingRow {
 }
 
 #[sqlx::test]
-async fn a_pair_plays_both_sides_and_moves_the_ratings(pool: PgPool) {
-    if !have_runner("a_pair_plays_both_sides_and_moves_the_ratings") {
+async fn a_pair_plays_one_game_and_moves_the_ratings(pool: PgPool) {
+    if !have_runner("a_pair_plays_one_game_and_moves_the_ratings") {
         return;
     }
     let app = start(pool.clone()).await;
@@ -220,7 +240,7 @@ async fn a_pair_plays_both_sides_and_moves_the_ratings(pool: PgPool) {
     let started = std::time::Instant::now();
     work(&app, settings(36_000)).await;
     eprintln!(
-        "a 5v5 contest pair (two games) through the match worker: {:.2} s",
+        "a 5v5 contest game through the match worker: {:.2} s",
         started.elapsed().as_secs_f64()
     );
     let (state, error): (String, Option<String>) =
@@ -231,72 +251,80 @@ async fn a_pair_plays_both_sides_and_moves_the_ratings(pool: PgPool) {
     assert_eq!((state.as_str(), error), ("done", None));
 
     let rows = games(&pool).await;
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 1, "a pair is one game");
     let teams = [payload.team_a, payload.team_b];
     assert!(teams.contains(&t1) && teams.contains(&t2));
-    for (k, row) in rows.iter().enumerate() {
-        assert_eq!(row.game as usize, k);
-        assert_eq!(row.round, Some(1));
-        assert_eq!(row.engine_tag, "v0.5.1");
-        assert_eq!(row.seed, payload.seed + k as i64);
-        assert_eq!((row.team_a, row.team_b), (payload.team_a, payload.team_b));
+    let row = &rows[0];
+    assert_eq!(row.game, 0);
+    assert_eq!(row.round, Some(1));
+    assert_eq!(row.engine_tag, "v0.5.1");
+    assert_eq!(row.seed, payload.seed);
+    assert_eq!((row.team_a, row.team_b), (payload.team_a, payload.team_b));
+    assert_eq!(
+        (row.submission_a, row.submission_b),
+        (payload.submission_a, payload.submission_b)
+    );
+    // The row agrees with the raw match object it came from, and both with
+    // the draw of the job's seed: the arena, and the team side A plays.
+    let raw = &row.result;
+    let want = drawn(payload.seed, raw);
+    assert_eq!(i16::from(want.side_a), row.side_a);
+    assert_eq!(
+        raw.get("arena").and_then(Value::as_str),
+        want.arena.as_deref()
+    );
+    assert_eq!(raw["match"], 0);
+    assert_eq!(raw["content_hash"], row.content_hash.as_str());
+    assert_eq!(
+        Some(raw["build_hash"].as_str().unwrap()),
+        row.build_hash.as_deref()
+    );
+    let side = |entrant: u64| {
+        raw["teams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["entrant"] == entrant)
+            .unwrap()
+            .clone()
+    };
+    // Without --rotate entrant e is the e-th --team and plays team e, so
+    // side A is the entrant of its drawn team.
+    let (a, b) = (u64::from(want.side_a), 1 - u64::from(want.side_a));
+    assert_eq!(side(a)["team"], a);
+    assert_eq!(side(a)["score"], row.score_a);
+    assert_eq!(side(a)["kills"], row.kills_a);
+    assert_eq!(side(b)["score"], row.score_b);
+    assert_eq!(side(b)["deaths"], row.deaths_b);
+    assert_eq!(raw["slots"].as_array().unwrap().len(), 10, "5v5");
+    let winner = match raw["winner_team"].as_u64() {
+        None => None,
+        Some(t) if t == a => Some(row.team_a),
+        Some(_) => Some(row.team_b),
+    };
+    assert_eq!(row.winner_team, winner);
+    // The specs are the submissions' ids, not a worker's paths.
+    for (entrant, submission) in [(a, row.submission_a), (b, row.submission_b)] {
         assert_eq!(
-            (row.submission_a, row.submission_b),
-            (payload.submission_a, payload.submission_b)
+            side(entrant)["spec"].as_str().unwrap(),
+            vec![format!("{submission}.wasm"); 5].join(",")
         );
-        // The second game swaps the sides.
-        assert_eq!(row.side_a as usize, k);
-        // The row agrees with the raw match object it came from.
-        let raw = &row.result;
-        assert_eq!(raw["match"], k);
-        assert_eq!(raw["content_hash"], row.content_hash.as_str());
-        assert_eq!(
-            Some(raw["build_hash"].as_str().unwrap()),
-            row.build_hash.as_deref()
-        );
-        let side = |entrant: u64| {
-            raw["teams"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|t| t["entrant"] == entrant)
-                .unwrap()
-                .clone()
-        };
-        assert_eq!(side(0)["team"], k as u64);
-        assert_eq!(side(0)["score"], row.score_a);
-        assert_eq!(side(0)["kills"], row.kills_a);
-        assert_eq!(side(1)["score"], row.score_b);
-        assert_eq!(side(1)["deaths"], row.deaths_b);
-        assert_eq!(raw["slots"].as_array().unwrap().len(), 10, "5v5");
-        let winner = match raw["winner_team"].as_u64() {
-            None => None,
-            Some(t) if t == k as u64 => Some(row.team_a),
-            Some(_) => Some(row.team_b),
-        };
-        assert_eq!(row.winner_team, winner);
-        // The specs are the submissions' ids, not a worker's paths.
-        let spec = side(0)["spec"].as_str().unwrap().to_owned();
-        assert_eq!(
-            spec,
-            vec![format!("{}.wasm", row.submission_a); 5].join(",")
-        );
-        // Clean modules: no fault.
-        assert_eq!(row.faults_a, Value::Array(vec![]));
-        assert_eq!(row.faults_b, Value::Array(vec![]));
-        // The replay is in the store under the match's id.
-        let key = row.replay_key.clone().unwrap();
-        assert_eq!(key, format!("replays/{}.kfmr", row.id));
-        let replay = app.store.get(&key).await.unwrap().expect("the replay");
-        assert!(replay.len() > 1000, "{} bytes", replay.len());
-        // Each side's change is its rating move.
-        assert!(row.delta_a != 0.0 || row.winner_team.is_none());
-        assert!(row.delta_a.signum() == -row.delta_b.signum() || row.delta_a == 0.0);
     }
+    // Clean modules: no fault.
+    assert_eq!(row.faults_a, Value::Array(vec![]));
+    assert_eq!(row.faults_b, Value::Array(vec![]));
+    // The replay is in the store under the match's id.
+    let key = row.replay_key.clone().unwrap();
+    assert_eq!(key, format!("replays/{}.kfmr", row.id));
+    let replay = app.store.get(&key).await.unwrap().expect("the replay");
+    assert!(replay.len() > 1000, "{} bytes", replay.len());
+    // Each side's change is its rating move.
+    assert!(row.delta_a != 0.0 || row.winner_team.is_none());
+    assert!(row.delta_a.signum() == -row.delta_b.signum() || row.delta_a == 0.0);
     for team in [t1, t2] {
         let r = rating(&pool, season.id, team).await;
-        assert_eq!(r.games, 2);
-        assert_eq!(r.wins + r.draws + r.losses, 2);
+        assert_eq!(r.games, 1);
+        assert_eq!(r.wins + r.draws + r.losses, 1);
         assert_eq!(r.engine_tag.as_deref(), Some("v0.5.1"));
         assert!(r.phi * glicko::SCALE < 350.0, "the deviation shrank");
         assert!(r.sigma > 0.0);
@@ -315,22 +343,117 @@ async fn a_pair_plays_both_sides_and_moves_the_ratings(pool: PgPool) {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!((games, faults), (2, 0));
+        assert_eq!((games, faults), (1, 0));
     }
 
-    // The same job again (a retry after its games were recorded) adds nothing.
+    // The same job again (a retry after its game was recorded) adds nothing.
     sqlx::query("UPDATE jobs SET state = 'queued', attempts = 0")
         .execute(&pool)
         .await
         .unwrap();
     work(&app, settings(36_000)).await;
-    assert_eq!(games(&pool).await.len(), 2);
-    assert_eq!(rating(&pool, season.id, t1).await.games, 2);
+    assert_eq!(games(&pool).await.len(), 1);
+    assert_eq!(rating(&pool, season.id, t1).await.games, 1);
 }
 
 #[sqlx::test]
-async fn a_lost_game_is_recorded_once_by_the_retry(pool: PgPool) {
-    if !have_runner("a_lost_game_is_recorded_once_by_the_retry") {
+async fn the_arena_and_the_sides_follow_the_seed(pool: PgPool) {
+    if !have_runner("the_arena_and_the_sides_follow_the_seed") {
+        return;
+    }
+    let app = start(pool.clone()).await;
+    let season = db_season(&pool, "S", 30).await;
+    let t1 = db_team(&pool, "Starters").await;
+    let s1 = db_ready_bot(
+        &pool,
+        Some(&app.store),
+        t1,
+        &std::fs::read(example("starter")).unwrap(),
+    )
+    .await;
+    let t2 = db_team(&pool, "Chasers").await;
+    let s2 = db_ready_bot(
+        &pool,
+        Some(&app.store),
+        t2,
+        &std::fs::read(example("chaser")).unwrap(),
+    )
+    .await;
+    // The first seed of every arena on either side: eight jobs of one pair.
+    let members = contest_pool();
+    let mut seeds: Vec<i64> = Vec::new();
+    for arena in &members {
+        for side_a in 0..2u8 {
+            let want = Draw {
+                arena: Some(arena.clone()),
+                side_a,
+            };
+            let seed = (1..10_000u64)
+                .find(|s| draw(*s, &members) == want)
+                .expect("a seed for every draw");
+            seeds.push(seed as i64);
+        }
+    }
+    for seed in &seeds {
+        let payload = MatchPayload {
+            season: season.id,
+            round: 1,
+            mode: "contest".to_owned(),
+            team_a: t1,
+            submission_a: s1,
+            team_b: t2,
+            submission_b: s2,
+            seed: *seed,
+        };
+        sqlx::query("INSERT INTO jobs (id, kind, payload) VALUES ($1, 'match', $2)")
+            .bind(Uuid::now_v7())
+            .bind(serde_json::to_value(&payload).unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    // A short cap: what is checked is where and as whom each game was played.
+    work(&app, settings(300)).await;
+    let rows = games(&pool).await;
+    assert_eq!(rows.len(), seeds.len());
+    if rows[0].result.get("arena").is_none() {
+        eprintln!(
+            "the_arena_and_the_sides_follow_the_seed: this kfm_arena names no arena; sides only"
+        );
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for row in &rows {
+        assert!(seeds.contains(&row.seed));
+        let want = drawn(row.seed, &row.result);
+        assert_eq!(i16::from(want.side_a), row.side_a, "seed {}", row.seed);
+        assert_eq!(
+            row.result.get("arena").and_then(Value::as_str),
+            want.arena.as_deref(),
+            "seed {}",
+            row.seed
+        );
+        // Side A's module sits on the team it drew.
+        let on_a = row.result["teams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["team"] == row.side_a)
+            .unwrap();
+        assert_eq!(
+            on_a["spec"].as_str().unwrap(),
+            vec![format!("{s1}.wasm"); 5].join(",")
+        );
+        seen.insert((want.arena.clone(), want.side_a));
+    }
+    if rows[0].result.get("arena").is_some() {
+        assert_eq!(seen.len(), 8, "every arena from either side: {seen:?}");
+    }
+    assert_eq!(rating(&pool, season.id, t1).await.games, 8);
+}
+
+#[sqlx::test]
+async fn a_lost_game_is_recorded_again_the_same_by_the_retry(pool: PgPool) {
+    if !have_runner("a_lost_game_is_recorded_again_the_same_by_the_retry") {
         return;
     }
     let app = start(pool.clone()).await;
@@ -354,8 +477,9 @@ async fn a_lost_game_is_recorded_once_by_the_retry(pool: PgPool) {
     one_round(&pool).await;
     work(&app, settings(36_000)).await;
     let first = games(&pool).await;
-    // Forget game 1 and its rating effect, as if the worker died after game 0.
-    sqlx::query("DELETE FROM matches WHERE game = 1")
+    assert_eq!(first.len(), 1);
+    // Forget the game's row, as if the worker died before recording it.
+    sqlx::query("DELETE FROM matches")
         .execute(&pool)
         .await
         .unwrap();
@@ -365,14 +489,15 @@ async fn a_lost_game_is_recorded_once_by_the_retry(pool: PgPool) {
         .unwrap();
     work(&app, settings(36_000)).await;
     let again = games(&pool).await;
-    assert_eq!(again.len(), 2);
-    assert_eq!(again[0].id, first[0].id, "game 0 is not recorded twice");
-    // Deterministic: game 1 comes out the same.
-    assert_eq!(again[1].result, first[1].result);
-    assert_eq!(again[1].winner_team, first[1].winner_team);
-    // Game 1 counted twice in the ratings here (the test deleted only the
+    assert_eq!(again.len(), 1);
+    assert_ne!(again[0].id, first[0].id);
+    // Deterministic: the same draw and the same game.
+    assert_eq!(again[0].side_a, first[0].side_a);
+    assert_eq!(again[0].result, first[0].result);
+    assert_eq!(again[0].winner_team, first[0].winner_team);
+    // The game counted twice in the ratings here (the test deleted only the
     // row), which is what the uniqueness of (job, game) prevents in real runs.
-    assert_eq!(rating(&pool, season.id, t1).await.games, 3);
+    assert_eq!(rating(&pool, season.id, t1).await.games, 2);
 }
 
 #[sqlx::test]
@@ -412,7 +537,7 @@ async fn a_module_that_traps_in_a_ranked_match_is_recorded_not_rejected(pool: Pg
         .unwrap();
     assert_eq!(state, "done");
     let rows = games(&pool).await;
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 1);
     for row in &rows {
         let faults = row.faults_a.as_array().unwrap();
         assert_eq!(
@@ -447,8 +572,8 @@ async fn a_module_that_traps_in_a_ranked_match_is_recorded_not_rejected(pool: Pg
             row
         }
     };
-    assert_eq!(counts(bad_sub).await, ("ready".to_owned(), 2, 2));
-    assert_eq!(counts(good_sub).await, ("ready".to_owned(), 2, 0));
+    assert_eq!(counts(bad_sub).await, ("ready".to_owned(), 1, 1));
+    assert_eq!(counts(good_sub).await, ("ready".to_owned(), 1, 0));
 }
 
 #[sqlx::test]
@@ -491,7 +616,7 @@ async fn an_engine_release_widens_the_deviation_before_the_next_game(pool: PgPoo
     one_round(&pool).await;
     work(&app, settings(36_000)).await;
     let rows = games(&pool).await;
-    // Replay the two games through Glicko-2: t1 widened once, before game 0.
+    // Replay the game through Glicko-2: t1 widened once, before it.
     let mut a = glicko::widen(settled);
     let mut b = Rating::default();
     for row in &rows {
@@ -512,7 +637,8 @@ async fn an_engine_release_widens_the_deviation_before_the_next_game(pool: PgPoo
         (r1.mu - a.mu).abs() < 1e-9 && (r1.phi - a.phi).abs() < 1e-9,
         "{r1:?} {a:?}"
     );
-    assert_eq!(r1.games, 42);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(r1.games, 41);
     assert_eq!(r1.engine_tag.as_deref(), Some("v0.5.1"));
     // Without the widening the update would have been smaller.
     let unwidened = glicko::rate_pair(settled, Rating::default(), 1.0).0;

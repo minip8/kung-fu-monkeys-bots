@@ -144,7 +144,7 @@ module that builds is one the host loads.
 
 The service (`service/`, `docs/ladder-api.md`) has accounts (GitHub or Google sign-in) and
 teams, source submissions built in the pinned build image and validated, seasons, Swiss-style
-rounds of 5v5 `contest` games played from both sides, Glicko-2 ratings, replays and a public
+rounds of 5v5 `contest` games on an arena and sides drawn at random, Glicko-2 ratings, replays and a public
 board. `kfm` (`cli/`) is its command line tool: log in, build, test, submit, follow matches and
 fetch replays; a game's viewer link plays its replay in the browser client of the game's
 engine release, from the first release after v0.5.1 (the engine's replay viewer, architecture

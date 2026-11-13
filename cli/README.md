@@ -58,7 +58,7 @@ holds only its own sources.
 | `kfm bots activate <submission> [--team T]` | Makes a ready submission its team's ranked bot. |
 | `kfm bots log <submission>` | Its build and validation log. |
 | `kfm matches list [--team T] [--season S] [--page N]` | Ranked games, newest first (every team's without `--team`; T is a team id or one of your teams' names). |
-| `kfm matches show <match>` | One game: both sides, scores, kills, rating changes, faults, the seed and hashes to re-run it, the viewer URL. |
+| `kfm matches show <match>` | One game: both sides, scores, kills, rating changes, faults, the arena, seed and hashes to re-run it, the viewer URL. |
 | `kfm ladder [--season S] [--page N]` | The board: rank, rating and deviation, record. |
 | `kfm seasons` | The seasons, the current one marked, and the engine release new games run on. |
 | `kfm replay get <match> [-o FILE]` | Downloads the game's `.kfmr` (default `<match>.kfmr`). |

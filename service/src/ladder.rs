@@ -209,7 +209,8 @@ pub struct MatchSummary {
     pub season: Option<String>,
     pub season_id: Option<Uuid>,
     pub round: Option<i32>,
-    /// kfm_arena's match index in its job: 0, then 1 with the sides swapped.
+    /// kfm_arena's match index in its job: 0 since v1.6 (a job is one game);
+    /// before, 0 and then 1 with the sides swapped.
     pub game: i16,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -222,6 +223,9 @@ pub struct MatchSummary {
     pub winner: Option<Uuid>,
     /// Side A (the higher ranked when scheduled) first.
     pub sides: [MatchSide; 2],
+    /// The arena it was played on (v1.6), from the stored result; null for
+    /// a game whose runner did not name it (engine releases before v0.10.0).
+    pub arena: Option<String>,
 }
 
 /// A recorded game as `GET /matches/{m}` shows it.
@@ -272,13 +276,14 @@ struct MatchRow {
     content_hash: String,
     build_hash: Option<String>,
     replay_key: Option<String>,
+    arena: Option<String>,
 }
 
 const MATCH_SELECT: &str = "SELECT m.id, m.season_id, se.name AS season, m.round, m.game, m.created_at, \
      m.engine_tag, m.seed, m.ticks, m.ending, m.winner_team, \
      m.team_a, ta.name AS name_a, m.submission_a, m.side_a, m.score_a, m.kills_a, m.deaths_a, m.faults_a, m.delta_a, \
      m.team_b, tb.name AS name_b, m.submission_b, m.score_b, m.kills_b, m.deaths_b, m.faults_b, m.delta_b, \
-     m.content_hash, m.build_hash, m.replay_key \
+     m.content_hash, m.build_hash, m.replay_key, m.result->>'arena' AS arena \
      FROM matches m JOIN teams ta ON ta.id = m.team_a JOIN teams tb ON tb.id = m.team_b \
      LEFT JOIN seasons se ON se.id = m.season_id";
 
@@ -324,6 +329,7 @@ impl MatchRow {
                     rating_change: tenth(self.delta_b),
                 },
             ],
+            arena: self.arena.clone(),
         }
     }
 }
