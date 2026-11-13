@@ -46,10 +46,15 @@ async fn db_match(
     minutes: i32,
 ) -> Uuid {
     let id = Uuid::now_v7();
-    let result = json!({"match": 0, "seed": 42, "ticks": 2000, "checksum": "0badf00d",
+    // A won game's runner named its arena; a drawn one's (as an engine
+    // release before v0.10.0) did not.
+    let mut result = json!({"match": 0, "seed": 42, "ticks": 2000, "checksum": "0badf00d",
         "result": "ended", "winner": if a_won { json!(0) } else { Value::Null },
         "winner_team": if a_won { json!(0) } else { Value::Null }, "teams": [], "slots": [],
         "content_hash": "a99dfcf8", "build_hash": "00000000"});
+    if a_won {
+        result["arena"] = json!("gorge");
+    }
     sqlx::query(
         "INSERT INTO matches (id, season_id, seed, engine_tag, content_hash, build_hash, team_a, submission_a, \
            team_b, submission_b, winner_team, replay_key, result, round, game, side_a, ending, ticks, \
@@ -343,6 +348,7 @@ async fn matches_filter_by_team_and_season_and_page(pool: PgPool) {
         "end",
         "winner",
         "sides",
+        "arena",
     ];
     assert_eq!(
         newest.as_object().unwrap().len(),
@@ -377,6 +383,9 @@ async fn matches_filter_by_team_and_season_and_page(pool: PgPool) {
     assert_eq!(b["faults"][0]["dead"], "trap");
     assert_eq!(b["rating_change"], -12.3);
     assert_eq!(alpha["matches"][1]["winner"], sides[0].team.to_string());
+    // The arena is the stored result's (v1.6); null when it names none.
+    assert_eq!(newest["arena"], Value::Null);
+    assert_eq!(alpha["matches"][1]["arena"], "gorge");
 
     // One match: the raw result, the replay and the viewer.
     let detail = get_json(&app.base, &format!("/matches/{}", ab[29])).await;
@@ -412,6 +421,9 @@ async fn matches_filter_by_team_and_season_and_page(pool: PgPool) {
     let html = get_html(&app.base, &format!("/matches/{}", ab[28])).await;
     assert!(html.contains("Alpha v Beta"), "{html}");
     assert!(html.contains("Alpha won"), "{html}");
+    assert!(html.contains("on <code>gorge</code>"), "{html}");
+    assert!(html.contains("arena gorge, seed 42"), "{html}");
+    assert!(!html.contains("of its pair"), "{html}");
     assert!(html.contains("slot 1: traps 4, dead (trap)"), "{html}");
     assert!(html.contains("+12.3") && html.contains("-12.3"));
     assert!(

@@ -201,9 +201,11 @@ call them `KFM_LADDER_PRESIGN_PER_MINUTE` times a minute (default 60, a shared t
 the API's memory); behind Caddy set `KFM_LADDER_TRUST_PROXY=1` so the client is the forwarded
 address rather than Caddy's loopback.
 
-`kfm-ladder worker match` claims the jobs and plays each pair with `kfm_arena` from both sides
-(`--matches 2 --rotate`, each module in all five slots of its team), then records two games,
-their replays (`replays/<match>.kfmr`) and the Glicko-2 ratings. It needs the database, the
+`kfm-ladder worker match` claims the jobs and plays each pair as one game of `kfm_arena`
+(`--matches 1`, each module in all five slots of its team) on an arena of the mode's pool and
+with the sides drawn from the job's seed (API v1.6 §10.3; the worker asks the runner for the
+pool, once per mode), then records the game, its replay (`replays/<match>.kfmr`) and the
+Glicko-2 ratings. It needs the database, the
 object store and `KFM_LADDER_ARENA`, nothing else (no Docker: `kfm_arena` is the sandbox).
 Natively from `service/`, with the stores of "The build worker" up:
 
@@ -216,10 +218,9 @@ cargo run -- worker match
 ```
 
 Each job works in `$TMPDIR/kfm-ladder-match/job-<id>` (removed afterwards; the match unit's
-`/tmp` tmpfs holds it). A 5v5 contest pair (two games) of the example bots that end their
-games takes about 0.3 s of `kfm_arena` on a laptop (v0.6.0); two games the 36000-tick cap ends
-(`chaser` against itself) take about 5 s, so one worker plays hundreds to thousands of pairs an
-hour, and a round of n teams is at most n·k/2 jobs. Then `GET /ladder`, `GET /matches?team=<id>` and `GET /matches/<id>`
+`/tmp` tmpfs holds it). A 5v5 contest game of the example bots takes under a second through
+the worker on a laptop (0.7 s for `starter` against `chaser`, v0.10.0), so one worker plays
+thousands of pairs an hour, and a round of n teams is at most n·k/2 jobs. Then `GET /ladder`, `GET /matches?team=<id>` and `GET /matches/<id>`
 (or the same paths in a browser) show the results.
 
 ## Registering the OAuth apps

@@ -1,30 +1,35 @@
 //! The match worker's jobs (`kfm-ladder worker match`; architecture §11
 //! "The jobs table is the queue", the `match` kind). One job is one pair of
-//! a scheduler round ([`crate::scheduler::MatchPayload`]): both modules from
-//! the store into a fresh directory, one run of the released `kfm_arena`,
+//! a scheduler round ([`crate::scheduler::MatchPayload`]) and one game: both
+//! modules from the store into a fresh directory, one run of the released
+//! `kfm_arena`,
 //!
 //! ```text
-//! kfm_arena --mode <mode> --team A.wasm,A.wasm,A.wasm,A.wasm,A.wasm
-//!   --team B.wasm,B.wasm,B.wasm,B.wasm,B.wasm --matches 2 --rotate --seed S --ticks N
+//! kfm_arena --mode <mode> --arena <arena> --team X.wasm,X.wasm,X.wasm,X.wasm,X.wasm
+//!   --team Y.wasm,Y.wasm,Y.wasm,Y.wasm,Y.wasm --matches 1 --seed S --ticks N
 //!   --json --result result.jsonl --replay-dir replays --quiet
 //! ```
 //!
-//! (the second game swaps the sides, so one run plays both), its two match
-//! objects parsed per the engine's `docs/arena-result.md`, and per game one
-//! `matches` row with its replay at `replays/<match>.kfmr` and both teams'
-//! Glicko-2 ratings updated in the same transaction. A module fault (a trap,
-//! an over-budget tick, a bad return, a dead module) in a ranked game is
-//! recorded on the game and counted on the submission, never a rejection:
-//! the module passed validation, and the engine already substituted "repeat
-//! last input" for the faulty ticks.
+//! where the arena and the sides are drawn from the job's seed ([`draw`]):
+//! the arena is a member of the mode's arena pool, which the worker asks the
+//! runner for once per mode ([`parse_pool`]), and the first `--team` (the
+//! mode's team 0) is side A's or side B's module. The match object is parsed
+//! per the engine's `docs/arena-result.md` into one `matches` row with its
+//! replay at `replays/<match>.kfmr`, and both teams' Glicko-2 ratings are
+//! updated in the same transaction. A module fault (a trap, an over-budget
+//! tick, a bad return, a dead module) in a ranked game is recorded on the
+//! game and counted on the submission, never a rejection: the module passed
+//! validation, and the engine already substituted "repeat last input" for
+//! the faulty ticks.
 //!
 //! `kfm_arena` failing (a non-zero exit, a missing or unparsable result) is
 //! a [`JobError::Retry`]: the job runs again up to its attempts. A game
 //! already recorded by an earlier attempt is skipped (`(job_id, game)` is
-//! unique), and the run is deterministic, so a retry records the same game.
-//! A job that starts after its season ended records nothing: the ranking
-//! froze at the end.
+//! unique), and the draw and the run are deterministic, so a retry records
+//! the same game. A job that starts after its season ended records nothing:
+//! the ranking froze at the end.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -43,12 +48,14 @@ use crate::{arena, crypto};
 /// The slots of one side in the contest (5v5), shared with the validation
 /// smoke match so a module is validated the way it is ranked.
 pub use crate::arena::{team_list, TEAM_SIZE};
-/// Games per job: the two sides of one pair (`--matches 2 --rotate`).
-pub const GAMES: usize = 2;
-/// How long one run may take on the worker's clock. Two capped games of 10
-/// slots at the full fuel budget are the worst case; real runs take well
+/// How long one run may take on the worker's clock. A capped game of 10
+/// slots at the full fuel budget is the worst case; real runs take well
 /// under a second.
 pub const MATCH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// The matches of the pool probe ([`parse_pool`]): `kfm_arena` plays match k
+/// of a pooled mode on member (k / teams) mod P, so two teams by the
+/// engine's 16 arenas show every member.
+pub const POOL_PROBE_MATCHES: u32 = 32;
 
 /// What the match worker needs beyond the shared [`WorkerConfig`].
 #[derive(Debug, Clone)]
@@ -93,10 +100,71 @@ pub struct Side {
     pub faults: Vec<Value>,
 }
 
-/// One game of the run.
+/// What a job's seed draws: the arena, and the team index side A plays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Draw {
+    /// A member of the mode's pool; `None` when the runner names no arena
+    /// (it then plays the one it would have).
+    pub arena: Option<String>,
+    /// 0: side A's module is the first `--team` (the mode's team 0); 1: side
+    /// B's is.
+    pub side_a: u8,
+}
+
+/// The draw of a job: SHA-256 over a fixed label and the seed (big-endian);
+/// the lowest bit of byte 0 is side A's team, bytes 8 to 15 (big-endian)
+/// modulo the pool's size the arena. The scheduler's seed is itself a hash
+/// of the season, the round and the two submissions, so the draw is as
+/// random as a coin and a die and the same on every attempt.
+pub fn draw(seed: u64, pool: &[String]) -> Draw {
+    let mut input = b"kfm-ladder match draw v1\0".to_vec();
+    input.extend_from_slice(&seed.to_be_bytes());
+    let digest = crypto::sha256(&input);
+    let mut pick = [0u8; 8];
+    pick.copy_from_slice(&digest[8..16]);
+    let arena = match pool.len() {
+        0 => None,
+        n => Some(pool[(u64::from_be_bytes(pick) % n as u64) as usize].clone()),
+    };
+    Draw {
+        arena,
+        side_a: digest[0] & 1,
+    }
+}
+
+/// The mode's arena pool from the probe's `--json --result` file: the
+/// `arena` of each match object, in order of first appearance. A runner
+/// from before the key (engine v0.10.0) names none: an empty pool.
+pub fn parse_pool(jsonl: &str) -> Result<Vec<String>, String> {
+    let mut pool: Vec<String> = Vec::new();
+    let mut summary = false;
+    let mut unnamed = false;
+    for (n, line) in jsonl.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let object: Value =
+            serde_json::from_str(line).map_err(|e| format!("line {}: not JSON ({e})", n + 1))?;
+        if object.get("summary").and_then(Value::as_bool) == Some(true) {
+            summary = true;
+            continue;
+        }
+        match object.get("arena").and_then(Value::as_str) {
+            Some(name) if !pool.iter().any(|p| p == name) => pool.push(name.to_owned()),
+            Some(_) => {}
+            None => unnamed = true,
+        }
+    }
+    if !summary {
+        return Err("the pool probe has no summary line (the run stopped early)".to_owned());
+    }
+    Ok(if unnamed { Vec::new() } else { pool })
+}
+
+/// The game of the run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GameResult {
-    /// kfm_arena's match index k.
+    /// kfm_arena's match index k (0: a job is one game).
     pub index: u32,
     pub seed: u64,
     pub ticks: u64,
@@ -161,7 +229,9 @@ fn faults_of(slots: &[Value], team: u64) -> Result<Vec<Value>, String> {
     Ok(out)
 }
 
-fn game_of(object: Value) -> Result<GameResult, String> {
+/// A match object as a game; side A is the entrant `entrant_a` (0: the
+/// first `--team`).
+fn game_of(object: Value, entrant_a: u64) -> Result<GameResult, String> {
     let index = u32::try_from(number(&object, "match")?).map_err(|_| "a huge match index")?;
     let teams = object
         .get("teams")
@@ -188,7 +258,7 @@ fn game_of(object: Value) -> Result<GameResult, String> {
             faults: faults_of(slots, team)?,
         })
     };
-    let sides = [side(0)?, side(1)?];
+    let sides = [side(entrant_a)?, side(1 - entrant_a)?];
     if teams.len() != 2 || sides[0].team == sides[1].team || sides.iter().any(|s| s.team > 1) {
         return Err("not two teams 0 and 1".to_owned());
     }
@@ -221,10 +291,15 @@ fn game_of(object: Value) -> Result<GameResult, String> {
     })
 }
 
-/// The games of a `--json --result` file: exactly [`GAMES`] match objects,
-/// indexed 0 and 1, and the summary line (a run that stopped early has
-/// none). Unknown keys are ignored, as `docs/arena-result.md` asks.
-pub fn parse_games(jsonl: &str) -> Result<Vec<GameResult>, String> {
+/// The game of a `--json --result` file: exactly one match object, index 0,
+/// and the summary line (a run that stopped early has none). `side_a` is the
+/// team index the draw gave side A, so side A is the entrant of that number
+/// (without `--rotate` entrant e is the e-th `--team` and plays team e).
+/// Unknown keys are ignored, as `docs/arena-result.md` asks.
+pub fn parse_game(jsonl: &str, side_a: u8) -> Result<GameResult, String> {
+    if side_a > 1 {
+        return Err(format!("side A on team {side_a}"));
+    }
     let mut games = Vec::new();
     let mut summary = false;
     for (n, line) in jsonl.lines().enumerate() {
@@ -237,16 +312,22 @@ pub fn parse_games(jsonl: &str) -> Result<Vec<GameResult>, String> {
             summary = true;
             continue;
         }
-        games.push(game_of(object).map_err(|e| format!("line {}: {e}", n + 1))?);
+        games.push(game_of(object, u64::from(side_a)).map_err(|e| format!("line {}: {e}", n + 1))?);
     }
     if !summary {
         return Err("the result has no summary line (the run stopped early)".to_owned());
     }
     let indices: Vec<u32> = games.iter().map(|g| g.index).collect();
-    if indices != (0..GAMES as u32).collect::<Vec<_>>() {
-        return Err(format!("expected games 0 and 1, found {indices:?}"));
+    let (Some(game), [0]) = (games.pop(), indices.as_slice()) else {
+        return Err(format!("expected game 0 alone, found {indices:?}"));
+    };
+    if game.sides[0].team != side_a {
+        return Err(format!(
+            "side A played team {}, not the drawn {side_a}",
+            game.sides[0].team
+        ));
     }
-    Ok(games)
+    Ok(game)
 }
 
 /// A job's directory, removed when dropped.
@@ -285,6 +366,8 @@ pub struct MatchWorker {
     db: PgPool,
     store: Store,
     settings: MatchSettings,
+    /// Each mode's arena pool, asked of the runner once.
+    pools: tokio::sync::Mutex<HashMap<String, Vec<String>>>,
 }
 
 /// The replay key of a match (`replays/<match>.kfmr`).
@@ -298,7 +381,66 @@ impl MatchWorker {
             db,
             store,
             settings,
+            pools: tokio::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The arena pool of `mode`, from a probe run the first time: reference
+    /// bots, [`POOL_PROBE_MATCHES`] matches of one tick each, so the runner
+    /// names every member its cycle visits. The pool is the engine's content,
+    /// never a copy kept here.
+    async fn pool(&self, mode: &str) -> Result<Vec<String>, JobError> {
+        let mut pools = self.pools.lock().await;
+        if let Some(pool) = pools.get(mode) {
+            return Ok(pool.clone());
+        }
+        let dir = JobDir::create(&self.settings.work_dir, Uuid::now_v7()).map_err(|e| {
+            JobError::retry(format!(
+                "cannot make a probe directory under {}: {e}",
+                self.settings.work_dir.display()
+            ))
+        })?;
+        let matches = POOL_PROBE_MATCHES.to_string();
+        let args: Vec<&std::ffi::OsStr> = [
+            "--mode",
+            mode,
+            "--team",
+            "ref:hard",
+            "--team",
+            "ref:hard",
+            "--matches",
+            &matches,
+            "--ticks",
+            "1",
+            "--json",
+            "--result",
+            "pool.jsonl",
+            "--quiet",
+        ]
+        .into_iter()
+        .map(std::ffi::OsStr::new)
+        .collect();
+        let run = arena::run(
+            &self.settings.arena,
+            &args,
+            Some(&dir.0),
+            self.settings.timeout,
+        )
+        .await
+        .map_err(JobError::Retry)?;
+        if run.status != Some(0) {
+            return Err(JobError::Retry(format!(
+                "kfm_arena exited {:?}: {}",
+                run.status,
+                last_line(&run.stderr)
+            )));
+        }
+        let text = std::fs::read_to_string(dir.0.join("pool.jsonl"))
+            .map_err(|e| JobError::retry(format!("kfm_arena left no pool probe: {e}")))?;
+        let pool = parse_pool(&text).map_err(|e| JobError::Retry(format!("the pool: {e}")))?;
+        tracing::info!(mode, ?pool, "arena pool");
+        pools.insert(mode.to_owned(), pool.clone());
+        Ok(pool)
     }
 
     /// The module of `submission` of `team`, checked against its hash.
@@ -349,12 +491,15 @@ impl MatchWorker {
             }
             Some((false,)) => {}
         }
-        let recorded: Vec<(i16,)> = sqlx::query_as("SELECT game FROM matches WHERE job_id = $1")
-            .bind(job.id)
-            .fetch_all(&self.db)
-            .await?;
-        if recorded.len() >= GAMES {
-            tracing::info!(job = %job.id, "both games already recorded");
+        // A job is one game; a job from before v1.6 that recorded one of its
+        // two is done as well.
+        let recorded: Option<(i16,)> =
+            sqlx::query_as("SELECT game FROM matches WHERE job_id = $1 LIMIT 1")
+                .bind(job.id)
+                .fetch_optional(&self.db)
+                .await?;
+        if recorded.is_some() {
+            tracing::info!(job = %job.id, "the game is already recorded");
             return Ok(());
         }
 
@@ -372,19 +517,27 @@ impl MatchWorker {
         let name_b = format!("{}.wasm", payload.submission_b);
         std::fs::write(dir.0.join(&name_a), &module_a).map_err(JobError::retry)?;
         std::fs::write(dir.0.join(&name_b), &module_b).map_err(JobError::retry)?;
-        let (team_a, team_b) = (team_list(&name_a), team_list(&name_b));
-        let (seed, ticks) = (payload.seed.to_string(), self.settings.ticks.to_string());
-        let games = GAMES.to_string();
-        let args: Vec<&std::ffi::OsStr> = [
-            "--mode",
-            &payload.mode,
+        let seed = u64::try_from(payload.seed)
+            .map_err(|_| JobError::Fail(format!("a negative seed {}", payload.seed)))?;
+        let drawn = draw(seed, &self.pool(&payload.mode).await?);
+        // The first --team plays the mode's team 0.
+        let (first, second) = if drawn.side_a == 0 {
+            (team_list(&name_a), team_list(&name_b))
+        } else {
+            (team_list(&name_b), team_list(&name_a))
+        };
+        let (seed, ticks) = (seed.to_string(), self.settings.ticks.to_string());
+        let mut args: Vec<&str> = vec!["--mode", &payload.mode];
+        if let Some(arena) = &drawn.arena {
+            args.extend(["--arena", arena]);
+        }
+        args.extend([
             "--team",
-            &team_a,
+            &first,
             "--team",
-            &team_b,
+            &second,
             "--matches",
-            &games,
-            "--rotate",
+            "1",
             "--seed",
             &seed,
             "--ticks",
@@ -395,10 +548,8 @@ impl MatchWorker {
             "--replay-dir",
             "replays",
             "--quiet",
-        ]
-        .into_iter()
-        .map(std::ffi::OsStr::new)
-        .collect();
+        ]);
+        let args: Vec<&std::ffi::OsStr> = args.into_iter().map(std::ffi::OsStr::new).collect();
         let started = std::time::Instant::now();
         let run = arena::run(
             &self.settings.arena,
@@ -418,29 +569,12 @@ impl MatchWorker {
         }
         let text = std::fs::read_to_string(dir.0.join("result.jsonl"))
             .map_err(|e| JobError::retry(format!("kfm_arena left no result: {e}")))?;
-        let parsed = parse_games(&text).map_err(|e| JobError::Retry(format!("the result: {e}")))?;
-        tracing::info!(job = %job.id, secs, "match played");
-        for game in parsed {
-            if recorded
-                .iter()
-                .any(|(g,)| i64::from(*g) == i64::from(game.index))
-            {
-                continue;
-            }
-            let replay = std::fs::read(
-                dir.0
-                    .join("replays")
-                    .join(format!("match_{}.kfmr", game.index)),
-            )
-            .map_err(|e| {
-                JobError::retry(format!(
-                    "kfm_arena left no replay of game {}: {e}",
-                    game.index
-                ))
-            })?;
-            self.record(job, &payload, game, &replay).await?;
-        }
-        Ok(())
+        let game = parse_game(&text, drawn.side_a)
+            .map_err(|e| JobError::Retry(format!("the result: {e}")))?;
+        tracing::info!(job = %job.id, secs, arena = ?drawn.arena, side_a = drawn.side_a, "match played");
+        let replay = std::fs::read(dir.0.join("replays").join("match_0.kfmr"))
+            .map_err(|e| JobError::retry(format!("kfm_arena left no replay: {e}")))?;
+        self.record(job, &payload, game, &replay).await
     }
 
     /// Stores one game's replay, then in one transaction its row, both
@@ -649,73 +783,59 @@ impl Handler for MatchWorker {
 mod tests {
     use super::*;
 
-    /// Two games of a contest run as kfm_arena v0.5.1 prints them, cut to
-    /// four slots: entrant 0 (A) on team 0 then team 1.
-    fn result(winner0: &str, winner1: &str, slot1: &str) -> String {
-        let game = |k: u32, a_team: u32, winner: &str, extra: &str| {
-            format!(
-                concat!(
-                    r#"{{"match":{k},"seed":{seed},"ticks":2119,"checksum":"07e2a6ea","result":"{end}","winner":0,"winner_team":{w},"#,
-                    r#""teams":[{{"team":0,"entrant":{e0},"spec":"x","place":1,"score":{s0},"kills":15,"deaths":4}},"#,
-                    r#"{{"team":1,"entrant":{e1},"spec":"y","place":2,"score":{s1},"kills":4,"deaths":15}}],"#,
-                    r#""slots":[{{"slot":0,"bot":0,"spec":"a.wasm","module":true,"team":0,"place":1,"score":2,"kills":5,"deaths":1,"acts":782,"subs":0,"traps":0,"over":0,"bad":0,"fuel_mean":1,"fuel_max":2,"fuel_init":3,"log":0,"dead":null}},"#,
-                    r#"{{"slot":1,"bot":5,"spec":"b.wasm","module":true,"team":1,"place":2,"score":0,"kills":0,"deaths":3,"acts":517,"subs":0,{extra}"fuel_mean":1,"fuel_max":2,"fuel_init":3,"log":0,"new_key":7}},"#,
-                    r#"{{"slot":2,"bot":1,"spec":"ref:hard","module":false,"team":0,"place":3,"score":0,"kills":0,"deaths":0,"acts":1,"subs":0}}],"#,
-                    r#""content_hash":"a99dfcf8","build_hash":"00000000","later":true}}"#
-                ),
-                k = k,
-                seed = 100 + k,
-                end = if winner == "null" { "cap" } else { "ended" },
-                w = winner,
-                e0 = if a_team == 0 { 0 } else { 1 },
-                e1 = if a_team == 0 { 1 } else { 0 },
-                s0 = 3,
-                s1 = 0,
-                extra = extra,
-            )
-        };
-        let clean = r#""traps":0,"over":0,"bad":0,"dead":null,"#;
+    /// The game of a contest run as kfm_arena prints it, cut to three
+    /// slots: entrant 0 is the first `--team` and plays team 0.
+    fn result(winner: &str, slot1: &str) -> String {
         format!(
-            "{}\n{}\n{{\"summary\":true,\"matches\":2}}\n",
-            game(0, 0, winner0, slot1),
-            game(1, 1, winner1, clean)
+            concat!(
+                r#"{{"match":0,"seed":100,"ticks":2119,"checksum":"07e2a6ea","result":"{end}","winner":0,"winner_team":{w},"#,
+                r#""teams":[{{"team":0,"entrant":0,"spec":"x","place":1,"score":3,"kills":15,"deaths":4}},"#,
+                r#"{{"team":1,"entrant":1,"spec":"y","place":2,"score":0,"kills":4,"deaths":15}}],"#,
+                r#""slots":[{{"slot":0,"bot":0,"spec":"a.wasm","module":true,"team":0,"place":1,"score":2,"kills":5,"deaths":1,"acts":782,"subs":0,"traps":0,"over":0,"bad":0,"fuel_mean":1,"fuel_max":2,"fuel_init":3,"log":0,"dead":null}},"#,
+                r#"{{"slot":1,"bot":5,"spec":"b.wasm","module":true,"team":1,"place":2,"score":0,"kills":0,"deaths":3,"acts":517,"subs":0,{extra}"fuel_mean":1,"fuel_max":2,"fuel_init":3,"log":0,"new_key":7}},"#,
+                r#"{{"slot":2,"bot":1,"spec":"ref:hard","module":false,"team":0,"place":3,"score":0,"kills":0,"deaths":0,"acts":1,"subs":0}}],"#,
+                r#""content_hash":"a99dfcf8","build_hash":"00000000","arena":"gorge","later":true}}"#,
+                "\n{{\"summary\":true,\"matches\":1}}\n"
+            ),
+            end = if winner == "null" { "cap" } else { "ended" },
+            w = winner,
+            extra = slot1,
         )
     }
 
     const CLEAN: &str = r#""traps":0,"over":0,"bad":0,"dead":null,"#;
 
     #[test]
-    fn two_games_parse_with_the_sides_swapped() {
-        let games = parse_games(&result("0", "0", CLEAN)).unwrap();
-        assert_eq!(games.len(), 2);
-        // Game 0: A is team 0 and team 0 won.
-        assert_eq!((games[0].sides[0].team, games[0].sides[1].team), (0, 1));
-        assert_eq!(games[0].score_a, 1.0);
-        assert_eq!(games[0].sides[0].score, 3);
-        assert_eq!(games[0].sides[0].kills, 15);
-        assert_eq!(games[0].sides[1].deaths, 15);
-        // Game 1: A is team 1, and team 0 (B) won.
-        assert_eq!((games[1].sides[0].team, games[1].sides[1].team), (1, 0));
-        assert_eq!(games[1].score_a, 0.0);
-        assert_eq!(games[1].sides[0].score, 0);
-        assert_eq!(games[1].seed, 101);
-        assert_eq!(games[1].content_hash, "a99dfcf8");
-        assert_eq!(games[1].build_hash, "00000000");
-        assert_eq!(games[0].ending, "ended");
-        assert!(games
-            .iter()
-            .all(|g| g.sides.iter().all(|s| s.faults.is_empty())));
-        // The raw object is kept whole, unknown keys included.
-        assert_eq!(games[0].raw["later"], true);
+    fn the_game_parses_from_either_side() {
+        // Side A drawn on team 0: A is the first --team, and team 0 won.
+        let game = parse_game(&result("0", CLEAN), 0).unwrap();
+        assert_eq!((game.sides[0].team, game.sides[1].team), (0, 1));
+        assert_eq!(game.score_a, 1.0);
+        assert_eq!(game.sides[0].score, 3);
+        assert_eq!(game.sides[0].kills, 15);
+        assert_eq!(game.sides[1].deaths, 15);
+        assert_eq!((game.index, game.seed), (0, 100));
+        assert_eq!(game.content_hash, "a99dfcf8");
+        assert_eq!(game.build_hash, "00000000");
+        assert_eq!(game.ending, "ended");
+        assert!(game.sides.iter().all(|s| s.faults.is_empty()));
+        // The raw object is kept whole, unknown keys and the arena included.
+        assert_eq!(game.raw["later"], true);
+        assert_eq!(game.raw["arena"], "gorge");
+        // Side A drawn on team 1: A is the second --team, and team 0 (B) won.
+        let game = parse_game(&result("0", CLEAN), 1).unwrap();
+        assert_eq!((game.sides[0].team, game.sides[1].team), (1, 0));
+        assert_eq!(game.score_a, 0.0);
+        assert_eq!(game.sides[0].score, 0);
+        assert_eq!(game.sides[1].kills, 15);
     }
 
     #[test]
     fn a_capped_game_is_a_draw() {
-        let games = parse_games(&result("null", "1", CLEAN)).unwrap();
-        assert_eq!(games[0].score_a, 0.5);
-        assert_eq!(games[0].ending, "cap");
-        // Game 1: A on team 1 won.
-        assert_eq!(games[1].score_a, 1.0);
+        let game = parse_game(&result("null", CLEAN), 0).unwrap();
+        assert_eq!(game.score_a, 0.5);
+        assert_eq!(game.ending, "cap");
+        assert_eq!(parse_game(&result("1", CLEAN), 1).unwrap().score_a, 1.0);
     }
 
     #[test]
@@ -734,40 +854,118 @@ mod tests {
                 r#"{"bad":1,"dead":null,"over":0,"slot":1,"traps":0}"#,
             ),
         ] {
-            let games = parse_games(&result("0", "0", extra)).unwrap();
-            // Slot 1 is team 1, side B in game 0.
-            assert!(games[0].sides[0].faults.is_empty());
-            assert_eq!(games[0].sides[1].faults.len(), 1);
-            assert_eq!(games[0].sides[1].faults[0].to_string(), want);
-            assert!(games[1].sides[1].faults.is_empty());
+            // Slot 1 is team 1: side B when A drew team 0, side A otherwise.
+            let game = parse_game(&result("0", extra), 0).unwrap();
+            assert!(game.sides[0].faults.is_empty());
+            assert_eq!(game.sides[1].faults.len(), 1);
+            assert_eq!(game.sides[1].faults[0].to_string(), want);
+            let game = parse_game(&result("0", extra), 1).unwrap();
+            assert_eq!(game.sides[0].faults.len(), 1);
+            assert!(game.sides[1].faults.is_empty());
         }
     }
 
     #[test]
     fn a_short_or_odd_result_is_an_error() {
-        let full = result("0", "0", CLEAN);
+        let full = result("0", CLEAN);
         let lines: Vec<&str> = full.lines().collect();
-        assert!(parse_games(&lines[..2].join("\n"))
+        assert!(parse_game(lines[0], 0).unwrap_err().contains("summary"));
+        assert!(parse_game(lines[1], 0)
             .unwrap_err()
-            .contains("summary"));
-        assert!(parse_games(&[lines[0], lines[2]].join("\n"))
-            .unwrap_err()
-            .contains("games 0 and 1"));
-        assert!(parse_games("nope\n").unwrap_err().contains("not JSON"));
+            .contains("game 0 alone"));
+        let two = format!("{}\n{}\n{}\n", lines[0], lines[0], lines[1]);
+        assert!(parse_game(&two, 0).unwrap_err().contains("game 0 alone"));
+        let second = full.replacen("\"match\":0", "\"match\":1", 1);
+        assert!(parse_game(&second, 0).unwrap_err().contains("game 0 alone"));
+        assert!(parse_game("nope\n", 0).unwrap_err().contains("not JSON"));
+        assert!(parse_game(&full, 2).unwrap_err().contains("team 2"));
         let free_for_all = full.replace("\"teams\":", "\"crowd\":");
-        assert!(parse_games(&free_for_all).unwrap_err().contains("teams"));
+        assert!(parse_game(&free_for_all, 0).unwrap_err().contains("teams"));
         let bad_winner = full.replacen("\"winner_team\":0", "\"winner_team\":7", 1);
-        assert!(parse_games(&bad_winner)
+        assert!(parse_game(&bad_winner, 0)
             .unwrap_err()
             .contains("neither side"));
         let no_dead = full.replacen(",\"dead\":null", "", 1);
-        assert!(parse_games(&no_dead).unwrap_err().contains("dead"));
+        assert!(parse_game(&no_dead, 0).unwrap_err().contains("dead"));
         let bad_hash = full.replacen("a99dfcf8", "A99DFCF8", 1);
-        assert!(parse_games(&bad_hash).unwrap_err().contains("hex"));
+        assert!(parse_game(&bad_hash, 0).unwrap_err().contains("hex"));
+        // Rotated sides (entrant 0 on team 1) are not what the draw asked for.
+        let rotated = full
+            .replacen("\"team\":0,\"entrant\":0", "\"team\":0,\"entrant\":1", 1)
+            .replacen("\"team\":1,\"entrant\":1", "\"team\":1,\"entrant\":0", 1);
+        assert!(parse_game(&rotated, 0)
+            .unwrap_err()
+            .contains("not the drawn"));
     }
 
     #[test]
     fn a_side_fills_its_five_slots() {
         assert_eq!(team_list("s.wasm"), "s.wasm,s.wasm,s.wasm,s.wasm,s.wasm");
+    }
+
+    fn probe(arenas: &[Option<&str>]) -> String {
+        let mut text = String::new();
+        for (k, arena) in arenas.iter().enumerate() {
+            let named = arena.map_or(String::new(), |a| format!(",\"arena\":\"{a}\""));
+            text.push_str(&format!("{{\"match\":{k},\"result\":\"cap\"{named}}}\n"));
+        }
+        text + "{\"summary\":true}\n"
+    }
+
+    #[test]
+    fn the_pool_is_the_arenas_the_probe_names_in_order() {
+        let cycle = [
+            "grove", "grove", "orchards", "orchards", "gorge", "gorge", "grove", "grove",
+        ];
+        let named: Vec<Option<&str>> = cycle.iter().copied().map(Some).collect();
+        assert_eq!(
+            parse_pool(&probe(&named)).unwrap(),
+            ["grove", "orchards", "gorge"]
+        );
+        // A mode without a pool plays one arena.
+        assert_eq!(
+            parse_pool(&probe(&[Some("dojo"), Some("dojo")])).unwrap(),
+            ["dojo"]
+        );
+        // A runner from before the key names none: no pool, no --arena.
+        assert!(parse_pool(&probe(&[None, None])).unwrap().is_empty());
+        assert!(parse_pool(&probe(&[Some("grove"), None]))
+            .unwrap()
+            .is_empty());
+        assert!(parse_pool("{\"match\":0,\"arena\":\"grove\"}\n")
+            .unwrap_err()
+            .contains("summary"));
+        assert!(parse_pool("nope\n").unwrap_err().contains("not JSON"));
+    }
+
+    #[test]
+    fn the_draw_is_fixed_by_the_seed_and_even_over_seeds() {
+        let pool: Vec<String> = ["grove", "orchards", "gorge", "burrows"]
+            .map(str::to_owned)
+            .to_vec();
+        assert_eq!(draw(7, &pool), draw(7, &pool));
+        assert_eq!(draw(7, &[]).arena, None);
+        assert_eq!(draw(7, &[]).side_a, draw(7, &pool).side_a);
+        let mut maps = [0u32; 4];
+        let mut sides = [0u32; 2];
+        let mut both = [[0u32; 2]; 4];
+        for seed in 0..4000u64 {
+            let d = draw(seed, &pool);
+            let map = pool
+                .iter()
+                .position(|p| Some(p) == d.arena.as_ref())
+                .unwrap();
+            maps[map] += 1;
+            sides[usize::from(d.side_a)] += 1;
+            both[map][usize::from(d.side_a)] += 1;
+        }
+        // 4000 draws: each map near 1000, each side near 2000, each map and
+        // side near 500 (well inside five standard deviations).
+        assert!(maps.iter().all(|n| (850..=1150).contains(n)), "{maps:?}");
+        assert!(sides.iter().all(|n| (1840..=2160).contains(n)), "{sides:?}");
+        assert!(
+            both.iter().flatten().all(|n| (390..=610).contains(n)),
+            "{both:?}"
+        );
     }
 }

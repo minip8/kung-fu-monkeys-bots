@@ -629,12 +629,15 @@ fn cmd_match_show(ctx: &Ctx, id: &str) -> Result<()> {
         print_json(&m);
         return Ok(());
     }
+    // The arena is named from ladder API v1.6 (engine v0.10.0) on.
+    let arena = m["arena"].as_str();
     println!(
-        "Match {} — season {}, round {}, game {} — {}",
+        "Match {} — season {}, round {}, game {}{} — {}",
         s(&m, "id"),
         s(&m, "season"),
         s(&m, "round"),
         s(&m, "game"),
+        arena.map_or(String::new(), |a| format!(", arena {a}")),
         when(&m, "created_at")
     );
     let ending = if m["end"] == "cap" {
@@ -687,8 +690,9 @@ fn cmd_match_show(ctx: &Ctx, id: &str) -> Result<()> {
         }
     }
     println!(
-        "Re-run: kfm_arena {} --seed {} (content {}, build {})",
+        "Re-run: kfm_arena {}{} --seed {} (content {}, build {})",
         s(&m, "engine_tag"),
+        arena.map_or(String::new(), |a| format!(" --arena {a}")),
         s(&m, "seed"),
         s(&m, "content_hash"),
         s(&m, "build_hash")

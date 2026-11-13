@@ -2,7 +2,7 @@
 {% block title %}Kung Fu Monkeys ladder: {{ title }}{% endblock %}
 {% block content %}
 <h1>{{ title }}</h1>
-<p class="sub">{% if !season.is_empty() %}Season {{ season }}, {% endif %}{% if !round.is_empty() %}round {{ round }}, {% endif %}game {{ game }} of the pair, played {{ when }} with engine release <code>{{ engine_tag }}</code>.</p>
+<p class="sub">{% if !season.is_empty() %}Season {{ season }}, {% endif %}{% if !round.is_empty() %}round {{ round }}, {% endif %}{% if game > 1 %}game {{ game }} of its pair, {% endif %}{% if !arena.is_empty() %}on <code>{{ arena }}</code>, {% endif %}played {{ when }} with engine release <code>{{ engine_tag }}</code>.</p>
 <section>
   <h2>{{ outcome }}</h2>
   <div class="scroll"><table>
@@ -19,7 +19,7 @@
   {% if let Some(url) = replay_url %}
   <p><a href="{{ url }}">Download the replay (.kfmr)</a> (the link is valid for an hour).
   {% if let Some(viewer) = viewer_url %}<a href="{{ viewer }}">Watch it in the {{ engine_tag }} client</a> (the replay plays in engine releases after v0.5.1, whose page carries the replay viewer).{% endif %}</p>
-  <p class="muted">Re-run it bit for bit with the {{ engine_tag }} release's kfm_arena: seed {{ seed }}, {{ ticks }} ticks, content {{ content_hash }}, build {{ build_hash }}.</p>
+  <p class="muted">Re-run it bit for bit with the {{ engine_tag }} release's kfm_arena: {% if !arena.is_empty() %}arena {{ arena }}, {% endif %}seed {{ seed }}, {{ ticks }} ticks, each side on the team index shown above, content {{ content_hash }}, build {{ build_hash }}.</p>
   {% else %}<p class="muted">No replay is stored.</p>{% endif %}
 </section>
 <section>
