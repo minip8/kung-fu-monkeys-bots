@@ -8,10 +8,10 @@ engine: it hosts bots, runs matches (`kfm_arena`) and owns the normative bot ABI
 ## What a bot is
 
 A bot is one core WebAssembly module (no WASI, no threads) behind four exports:
-`kfm_abi_version` (returns 1), `kfm_obs_buffer` (where the host writes the observation),
+`kfm_abi_version` (returns 2), `kfm_obs_buffer` (where the host writes the observation),
 `kfm_init(seed, slot)` and `kfm_act(tick)`, which returns the monkey's input for that tick packed
 into 40 bits (stick direction and magnitude, aim, buttons, sub-tick). Before every `kfm_act` the
-host writes an `Observation` v1 into the module's buffer: a fixed 5748-byte layout with the own
+host writes an `Observation` v2 into the module's buffer: a fixed 5880-byte layout with the own
 monkey, every monkey, banana and pickup, the arena's walls and hazards, the match clock and
 scores, and the bot's input delay. The host runs one instance per monkey, each with its own
 memory, and meters every `kfm_act` at 100 000 wasm instructions.
@@ -39,11 +39,12 @@ built as C.
 
 | Path | What |
 |---|---|
-| `sdk/c/kfm_bot.h` | The C SDK: one freestanding header with the `Observation` v1 structs (layout checked by `static_assert`), the input packing, Q16.16 math, the engine's sine table, atan2 and Rng, and the banana flight step, all bit for bit with the engine. A byte-identical copy of the engine's `tools/bots/sdk-c/kfm_bot.h` (`sdk/c/ENGINE_SOURCE.txt`); never edit it here. |
+| `sdk/c/kfm_bot.h` | The C SDK: one freestanding header with the `Observation` v2 structs (layout checked by `static_assert`), the input packing, Q16.16 math, the engine's sine table, atan2 and Rng, and the banana flight step, all bit for bit with the engine. A byte-identical copy of the engine's `tools/bots/sdk-c/kfm_bot.h` (`sdk/c/ENGINE_SOURCE.txt`); never edit it here. |
 | `sdk/cpp/kfm_bot.hpp` | The C++ layer over it: `Fixed` and `Vec2` with operators, views over the observation that iterate only what is there, an `Input` builder, the `KFM_BOT` macro that defines the exports, and helpers (nearest enemy and banana, flight prediction and time to impact, "will this hit me", the dash-catch direction, a clear throwing line, the grid's cells and walking). Every helper is documented in the header. |
 | `examples/` | Example bots, one directory each: `idle`, `chaser` (C), `starter` (C++, the one to copy) and `holder` (C++, the starter that stays on the hill). `examples/README.md` says what each does and how to build and run them. |
 | `tools/build.sh` | The build recipe: `tools/build.sh <bot dir> <out.wasm>`. |
 | `tools/fetch_kfm_arena.sh` | Fetches the engine's released headless `kfm_arena` for the pinned engine into `.kfm/`. |
+| `tools/contest_maps.py` | Draws the contest's arenas from an engine checkout's content, for the site's contest guide. |
 | `docs/build.md` | The recipe in full, the build sandbox, the engine pin and CI. |
 | `service/` | The ladder service, `kfm-ladder` (Rust): accounts, tokens, teams, submissions built in the sandbox, seasons, scheduled matches, Glicko-2 ratings, replays and the ladder. `service/README.md` says how to run and test it. |
 | `docs/ladder-api.md` | The ladder's HTTP API, normative: every route, its auth, its JSON and its errors. |
@@ -97,28 +98,30 @@ pinned engine commit instead (`docs/build.md`).
 
 ## The contest mode
 
-The ladder plays the engine's `contest` mode (`content/modes.toml`; architecture §8 "The ladder"
-and "Teams, fog and calls", §5.12 for the grid: read them). Since engine v0.7.0 it is king of
-the hill with the squad shape of `grid_rounds_1t`, on the `courtyard_hill` arena (24 x 14 cells
-of one unit, the hill a 4 x 2 box in the middle between two pillars): two teams of up to five
-monkeys, one module instance each. A team scores a point for every 60 ticks (turns) its monkeys
-alone stand on the hill (a monkey whose centre is in the box; a contested or empty hill holds
-every team's clock); five points win, else the leading team after 3600 ticks (a tied lead is a
-draw). Eliminations score nothing, but a dead monkey respawns only after 120 ticks, and its
-bananas vanish (an empty hand grows one after 120). A bot finds the hill in the observation:
-`match.modeData` words 8-11 are zone 0's box (`KFM_ZONE_WORD`; the C++ layer's `o.hill()`), and
-word 5 is the team holding it alone plus one (`o.hillHolder()`). Before v0.7.0 the contest was
-the same squad playing rounds of elimination on `courtyard`. Monkeys move on the grid, to one of the
-eight neighbouring cells per turn at one-tick turns, a dash covering two cells; bananas fly
-freely as everywhere else, at about a cell a tick, and bounce off the walls. A monkey has 2 HP;
-one per team, the catcher, has a dash whose perfect window catches a banana, and nobody else's
-does. Vision is `own` fog: a monkey sees a cone 4 cells deep along its facing (5 when it stood
-still) behind a clear line of sight, the cells next to it, bananas in flight within 3 cells and
-around its own banana; what it does not see is zeroed in its observation. A call ability
-shouts the aim byte (one of 256 symbols) to every monkey within 4 cells, ally or enemy, so a
-team shares what it sees through the game. The row may change between engine releases; the
-engine's content is the truth, and the observation carries the numbers a bot needs (`rules`,
-the ability defs, `turnTicks`).
+The ladder plays the engine's `contest` mode. Since engine v0.10.0 it is the `harvest` kind,
+"bananas as the economy": two teams of five monkeys on a grid at one-tick turns, one module
+instance per monkey. Bananas come from the arena's trees and from nowhere else; a monkey carries
+up to three and banks one every 2 turns while it stands in its team's home zone, a point each.
+An undefended home loses one back every 6 turns to each enemy standing in it. The first team to
+40 wins, else the leader after 3600 turns (a tied lead is a draw). Eliminations score nothing,
+but a dead monkey drops its cargo, respawns only after 240 turns and comes back empty-handed. The
+same bananas are the weapon: thrown, they fly out and come back; a dash with one in hand is an
+attack; and one monkey per team, the catcher, takes an enemy's banana out of the air with a
+perfectly timed dash. Vision is `own` fog (a cone along the facing), and a call shouts one of
+256 symbols to every monkey within 4 cells. A game is played on one of four arenas (`grove`,
+`orchards`, `gorge`, `burrows`), drawn at random with the sides.
+
+**The guide is <https://bots.kfm.minip8.com/docs/contest>**: the rules in full, the four arenas
+drawn, what a monkey sees, and where each of these is in the observation (the homes in `zones`,
+the trees in `arena.spawners`, the two beats in `match.modeData`). Its source is
+`service/templates/contest.html`. The row may change between engine releases: the engine's
+content (`content/modes.toml`, `content/arenas/`) is the truth, the engine's `docs/bot-abi.md`
+§3.3 is the kind as a bot sees it, and the observation carries the numbers a bot needs.
+
+The example bots here were written before these rules (for king of the hill, the contest of
+engine v0.7.0 to v0.9.0): they move, see and fight on the grid under fog, and make no effort to
+gather or bank. The smallest bot that plays the economy is the engine's
+[`tools/bots/examples/gatherer.c`](https://github.com/minip8/kung-fu-monkeys/blob/v0.10.0/tools/bots/examples/gatherer.c).
 
 ## The sandbox
 
