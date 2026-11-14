@@ -1,12 +1,13 @@
 {% extends "base.html" %}
+{% block page %}pg-home{% endblock %}
 {% block content %}
-<h1>Kung Fu Monkeys ladder</h1>
-<p class="sub">Bots built from source and ranked in the <code>contest</code> mode. Engine release {{ engine_tag }}.</p>
-
 {% if let Some(message) = error %}<section class="error" role="alert">{{ message }}</section>{% endif %}
 {% if let Some(message) = notice %}<section class="notice">{{ message }}</section>{% endif %}
 
 {% if let Some(user) = user %}
+<p class="eyebrow">Your portal · engine {{ engine_tag }}</p>
+<h1>Your portal</h1>
+<p class="sub">Your account, tokens, team and submissions. New here? The <a href="/docs/contest">contest guide</a> has the rules, the four arenas and what a bot reads; <a href="https://github.com/minip8/kung-fu-monkeys-bots#quick-start">the quick start</a> gets a bot built and submitted.</p>
 <section>
   <h2>Signed in as {{ user.name }}</h2>
   <p class="muted">User id <code>{{ user.id }}</code> (teammates add you by it or by your name).</p>
@@ -126,11 +127,77 @@
   {% endif %}
 </section>
 {% else %}
+{% if let Some(l) = landing %}
+<div class="hero">
+  <div>
+    <p class="eyebrow">{% if let Some(season) = l.season %}Season {{ season.name }} · {% endif %}engine {{ engine_tag }}</p>
+    <h1>Write a bot.<br><em>Bank the bananas.</em></h1>
+    <p class="lede">Kung Fu Monkeys is an arena brawler where bananas fly like boomerangs. On the ladder your code plays it <strong>five against five</strong>: one WebAssembly module drives a whole team that harvests bananas, carries them home, steals from the other side and fights for every one. <strong>First team to bank 40 wins.</strong></p>
+    <div class="cta signin">
+      <a class="button" href="/auth/github">Sign in with GitHub</a>
+      <a class="button" href="/auth/google">Sign in with Google</a>
+      <a class="button quiet" href="/docs/contest">Read the contest guide</a>
+    </div>
+  </div>
+  <figure>
+    {% include "maps/grove.svg" %}
+    <figcaption><code>grove</code>, one of the four arenas a game is drawn from: two homes, six banana trees (the number is the turns between fruit), two pits.</figcaption>
+  </figure>
+</div>
+
+<div class="grid4">
+  <section class="beat"><h3>Harvest</h3><p>Trees are the only supply. Each lays a banana on its beat, and stops when its cell is full.</p></section>
+  <section class="beat"><h3>Carry</h3><p>A monkey holds three. The same bananas are its cargo and its weapon: bank the last one and it is unarmed.</p></section>
+  <section class="beat"><h3>Bank</h3><p>Stand in your home zone: one banana banked, one point, every two turns.</p></section>
+  <section class="beat"><h3>Steal and fight</h3><p>An empty home leaks points to raiders. A kill drops the cargo; a perfect dash catch takes the banana out of the air.</p></section>
+</div>
+
+<div class="grid3">
+  <section><div class="step-n">1</div><h2>Write</h2><p>A bot is a directory of C++ (or C) sources over a small freestanding SDK. Every tick it reads an observation of what its monkey sees and returns one input: move, aim, dash, throw, call.</p><p class="small muted">Start from <a href="https://github.com/minip8/kung-fu-monkeys-bots/tree/main/examples">the example bots</a>.</p></section>
+  <section><div class="step-n">2</div><h2>Test</h2><p>The <code>kfm</code> tool builds your bot exactly as the ladder does and plays it against the reference bots on your machine, with the engine's own headless runner.</p><p class="small muted">Deterministic: every game replays bit for bit.</p></section>
+  <section><div class="step-n">3</div><h2>Climb</h2><p>Submit the sources. The ladder builds them in a sandbox, checks the module, and pairs your team {% if l.round_minutes > 0 %}every {{ l.round_minutes }} minutes {% endif %}with teams near its rating.</p><p class="small muted">Glicko-2 ratings, public results, replays you can watch.</p></section>
+</div>
+
+<section>
+  <h2>Quick start</h2>
+<pre><code>uv tool install kfm-cli                 <span class="c"># the PyPI name; the command is kfm (pipx works too)</span>
+git clone --depth 1 https://github.com/minip8/kung-fu-monkeys-bots.git
+cp -r kung-fu-monkeys-bots/examples/starter mybot &amp;&amp; cd mybot
+kfm login                               <span class="c"># the browser confirms; a submit token is stored</span>
+kfm build                               <span class="c"># out/bot.wasm with the ladder's recipe</span>
+kfm test                                <span class="c"># ranked-shape 5v5 games against ref:hard</span>
+kfm submit --wait --activate            <span class="c"># built and validated by the ladder, then your ranked bot</span></code></pre>
+  <p class="muted small">Sign in and create a team here first. Docker is used for the ladder's own build image (or <code>kfm build --local</code> with a clang that targets wasm32). Everything else is in <a href="https://github.com/minip8/kung-fu-monkeys-bots">the repository</a>.</p>
+</section>
+
+<div class="grid2">
+  <section>
+    <div class="head-row"><h2>Top of the ladder</h2><a href="/ladder">Full ladder</a></div>
+    {% if l.top.is_empty() %}<p class="muted">No team has played in this season yet. Be the first.</p>
+    {% else %}
+    <table>
+      <tr><th class="num">#</th><th>Team</th><th class="num">Rating</th><th class="num">Games</th></tr>
+      {% for r in l.top %}
+      <tr{% if r.rank <= 3 %} class="top"{% endif %}><td class="rank num">{{ r.rank }}</td><td class="team">{{ r.name }}</td><td class="num">{{ r.rating }} <span class="muted">± {{ r.rd }}</span></td><td class="num">{{ r.games }}</td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+  </section>
+  <section>
+    <div class="head-row"><h2>Latest games</h2><a href="/matches">All games</a></div>
+    {% if l.games.is_empty() %}<p class="muted">No game has been played yet.</p>
+    {% else %}
+    {% for g in l.games %}{% include "game_line.html" %}{% endfor %}
+    {% endif %}
+  </section>
+</div>
+{% else %}
 <section class="signin">
   <h2>Sign in</h2>
   <p>Sign in with GitHub or Google. The ladder stores no password; you can link the other provider later.</p>
   <a class="button" href="/auth/github">Sign in with GitHub</a>
   <a class="button" href="/auth/google">Sign in with Google</a>
 </section>
+{% endif %}
 {% endif %}
 {% endblock %}

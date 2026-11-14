@@ -2,7 +2,7 @@
 
 How a bot's source becomes the `.wasm` module the engine plays, locally and on the ladder, and
 how this repository pins the engine it builds and plays against. The module contract itself
-(the four exports, `Observation` v1, the budgets) is the engine's `docs/bot-abi.md`; the ladder's
+(the four exports, `Observation` v2, the budgets) is the engine's `docs/bot-abi.md`; the ladder's
 design is the engine's `docs/architecture.md` §8 "The ladder". This document describes the
 files in this repository that implement them:
 
@@ -215,7 +215,13 @@ engine release's tag to its commit and sets `tag=` and `commit=`, copies that co
 lines above and in `service/README.md` that name today's pin, and runs `tools/check_header.sh`.
 It commits nothing. Then rebuild and play the examples and commit it all together; when the
 script says the header changed, `sdk/cpp/kfm_bot.hpp`, the examples and the prose that describes
-the contest are yours to bring along first.
+the contest are yours to bring along first. One piece of that prose is held to the pin by a
+test: the site's contest guide (`service/templates/contest.html`, `/docs/contest`) names the
+engine release it was written for (`CONTEST_GUIDE_ENGINE` in `service/src/portal.rs`), and the
+service's tests fail while `engine.lock`'s `tag=` is another. So a bump's pull request is red
+until someone has read the guide against the new release's `content/modes.toml`,
+`content/arenas/` and `docs/bot-abi.md` §3, redrawn the arenas (`tools/contest_maps.py <engine
+checkout>` writes `service/templates/maps/*.svg` from the content) and moved the constant.
 
 The engine's release workflow does this on every `v*` tag (its `deploy.yml`, job `bots-bump`,
 once the release has its `kfm_arena` assets): it runs the script in a checkout of this

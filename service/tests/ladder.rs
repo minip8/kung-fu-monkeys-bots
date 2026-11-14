@@ -261,6 +261,19 @@ async fn the_board_ranks_the_current_season_and_pages(pool: PgPool) {
     assert!(html.contains("href=\"/ladder?season=Old\""), "{html}");
     let page2 = get_html(&app.base, "/ladder?page=2").await;
     assert!(page2.contains("Team 00") && page2.contains("previous"));
+    // A team's name links to its games.
+    assert!(
+        html.contains(&format!(
+            "href=\"/matches?team={}\" title=\"This team's games\">Team 54</a>",
+            ids[54]
+        )),
+        "{html}"
+    );
+    // The landing page shows the top of the current season's board.
+    let landing = get_html(&app.base, "/").await;
+    assert!(landing.contains("Season Now"), "{landing}");
+    assert!(landing.contains("Active one") && landing.contains("Team 54"));
+    assert!(landing.contains("Team 51") && !landing.contains("Team 50"));
 }
 
 #[sqlx::test]
@@ -327,6 +340,56 @@ async fn matches_filter_by_team_and_season_and_page(pool: PgPool) {
         get(&app.base, "/matches?team=nope").await.status(),
         StatusCode::BAD_REQUEST
     );
+
+    // The same list as a page for a browser, with the same filters.
+    let html = get_html(&app.base, "/matches").await;
+    assert!(html.contains("<h1>Games</h1>"), "{html}");
+    assert!(html.contains("Every ranked game"), "{html}");
+    assert_eq!(html.matches(">game</a>").count(), 25);
+    assert!(
+        html.contains("<td class=\"team\">Beta</td><td class=\"num\"><strong>3 – 1</strong></td><td>Gamma</td>"),
+        "the winner in bold: {html}"
+    );
+    assert!(html.contains("<code>gorge</code>"), "{html}");
+    assert!(html.contains("href=\"/matches?page=2\">next</a>"), "{html}");
+    let html = get_html(
+        &app.base,
+        &format!("/matches?team={}&season=Now&page=1", sides[2].team),
+    )
+    .await;
+    assert!(html.contains("<h1>Games of Gamma</h1>"), "{html}");
+    assert!(html.contains("of season <strong>Now</strong>"), "{html}");
+    assert_eq!(html.matches(">game</a>").count(), 2);
+    assert!(!html.contains(">next</a>") && !html.contains(">previous</a>"));
+    let alpha2 = get_html(
+        &app.base,
+        &format!("/matches?team={}&page=2", sides[0].team),
+    )
+    .await;
+    assert!(
+        alpha2.contains(&format!(
+            "href=\"/matches?page=1&#38;team={}\">previous</a>",
+            sides[0].team
+        )),
+        "{alpha2}"
+    );
+    let bad = reqwest::Client::new()
+        .get(format!("{}/matches?season=Nope", app.base))
+        .header("accept", "text/html")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), StatusCode::NOT_FOUND);
+    // The board's page lists the season's latest games, and the landing page too.
+    let board = get_html(&app.base, "/ladder").await;
+    assert!(board.contains("Latest games"), "{board}");
+    assert!(
+        board.contains("href=\"/matches?season=Now\">All games</a>"),
+        "{board}"
+    );
+    assert_eq!(board.matches("class=\"game\"").count(), 8);
+    let landing = get_html(&app.base, "/").await;
+    assert_eq!(landing.matches("class=\"game\"").count(), 5);
     assert_eq!(
         get(&app.base, "/matches?season=Nope").await.status(),
         StatusCode::NOT_FOUND

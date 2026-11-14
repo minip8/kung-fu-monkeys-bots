@@ -1,0 +1,40 @@
+<svg class="map" viewBox="0 0 24 14" role="img" aria-label="The grove arena, 24 by 14 cells: a home zone for each team on the west and east sides, 6 trees (2 bearing every 30 turns, 2 bearing every 60 turns, 2 bearing every 90 turns), and pits.">
+<rect class="m-floor" width="24" height="14" rx=".4"/>
+<path class="m-grid" d="M1 0V14M2 0V14M3 0V14M4 0V14M5 0V14M6 0V14M7 0V14M8 0V14M9 0V14M10 0V14M11 0V14M12 0V14M13 0V14M14 0V14M15 0V14M16 0V14M17 0V14M18 0V14M19 0V14M20 0V14M21 0V14M22 0V14M23 0V14M0 1H24M0 2H24M0 3H24M0 4H24M0 5H24M0 6H24M0 7H24M0 8H24M0 9H24M0 10H24M0 11H24M0 12H24M0 13H24"/>
+<rect class="m-pit" x="11" y="0" width="2" height="2"/>
+<rect class="m-pit" x="11" y="12" width="2" height="2"/>
+<rect class="m-home0" x="4" y="6" width="3" height="2" rx=".2"/>
+<text class="m-label" x="5.5" y="7.25">home 0</text>
+<rect class="m-home1" x="17" y="6" width="3" height="2" rx=".2"/>
+<text class="m-label" x="18.5" y="7.25">home 1</text>
+<rect class="m-wall" x="5" y="2" width="2" height="2"/>
+<rect class="m-wall" x="17" y="2" width="2" height="2"/>
+<rect class="m-wall" x="9" y="5" width="1" height="4"/>
+<rect class="m-wall" x="14" y="5" width="1" height="4"/>
+<rect class="m-wall" x="5" y="10" width="2" height="2"/>
+<rect class="m-wall" x="17" y="10" width="2" height="2"/>
+<circle class="m-spawn0" cx="1.5" cy="2.5" r=".17"/>
+<circle class="m-spawn1" cx="22.5" cy="2.5" r=".17"/>
+<circle class="m-spawn0" cx="1.5" cy="5.5" r=".17"/>
+<circle class="m-spawn1" cx="22.5" cy="5.5" r=".17"/>
+<circle class="m-spawn1" cx="20.5" cy="6.5" r=".17"/>
+<circle class="m-spawn0" cx="3.5" cy="7.5" r=".17"/>
+<circle class="m-spawn0" cx="1.5" cy="8.5" r=".17"/>
+<circle class="m-spawn1" cx="22.5" cy="8.5" r=".17"/>
+<circle class="m-spawn0" cx="1.5" cy="11.5" r=".17"/>
+<circle class="m-spawn1" cx="22.5" cy="11.5" r=".17"/>
+<path class="m-power" d="M11.5 3.12l.38 .38l-.38 .38l-.38 -.38z"/>
+<path class="m-power" d="M12.5 10.12l.38 .38l-.38 .38l-.38 -.38z"/>
+<circle class="m-tree" cx="11.5" cy="6.5" r="0.48"/>
+<text class="m-beat" x="11.5" y="6.68">30</text>
+<circle class="m-tree" cx="12.5" cy="7.5" r="0.48"/>
+<text class="m-beat" x="12.5" y="7.68">30</text>
+<circle class="m-tree" cx="8.5" cy="11.5" r="0.43"/>
+<text class="m-beat" x="8.5" y="11.68">60</text>
+<circle class="m-tree" cx="15.5" cy="2.5" r="0.43"/>
+<text class="m-beat" x="15.5" y="2.68">60</text>
+<circle class="m-tree" cx="5.5" cy="4.5" r="0.38"/>
+<text class="m-beat" x="5.5" y="4.68">90</text>
+<circle class="m-tree" cx="18.5" cy="9.5" r="0.38"/>
+<text class="m-beat" x="18.5" y="9.68">90</text>
+</svg>

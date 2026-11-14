@@ -1,0 +1,41 @@
+<svg class="map" viewBox="0 0 26 16" role="img" aria-label="The gorge arena, 26 by 16 cells: a home zone for each team on the west and east sides, 6 trees (2 bearing every 30 turns, 2 bearing every 60 turns, 2 bearing every 90 turns), and pits.">
+<rect class="m-floor" width="26" height="16" rx=".4"/>
+<path class="m-grid" d="M1 0V16M2 0V16M3 0V16M4 0V16M5 0V16M6 0V16M7 0V16M8 0V16M9 0V16M10 0V16M11 0V16M12 0V16M13 0V16M14 0V16M15 0V16M16 0V16M17 0V16M18 0V16M19 0V16M20 0V16M21 0V16M22 0V16M23 0V16M24 0V16M25 0V16M0 1H26M0 2H26M0 3H26M0 4H26M0 5H26M0 6H26M0 7H26M0 8H26M0 9H26M0 10H26M0 11H26M0 12H26M0 13H26M0 14H26M0 15H26"/>
+<rect class="m-pit" x="11" y="0" width="4" height="3"/>
+<rect class="m-pit" x="11" y="5" width="4" height="6"/>
+<rect class="m-pit" x="11" y="13" width="4" height="3"/>
+<rect class="m-home0" x="2" y="7" width="3" height="2" rx=".2"/>
+<text class="m-label" x="3.5" y="8.25">home 0</text>
+<rect class="m-home1" x="21" y="7" width="3" height="2" rx=".2"/>
+<text class="m-label" x="22.5" y="8.25">home 1</text>
+<rect class="m-wall" x="5" y="2" width="2" height="2"/>
+<rect class="m-wall" x="18" y="3" width="2" height="2"/>
+<rect class="m-wall" x="8" y="7" width="1" height="2"/>
+<rect class="m-wall" x="17" y="7" width="1" height="2"/>
+<rect class="m-wall" x="6" y="11" width="2" height="2"/>
+<rect class="m-wall" x="19" y="12" width="2" height="2"/>
+<circle class="m-spawn0" cx="1.5" cy="3.5" r=".17"/>
+<circle class="m-spawn1" cx="24.5" cy="3.5" r=".17"/>
+<circle class="m-spawn0" cx="1.5" cy="5.5" r=".17"/>
+<circle class="m-spawn1" cx="24.5" cy="5.5" r=".17"/>
+<circle class="m-spawn0" cx="0.5" cy="7.5" r=".17"/>
+<circle class="m-spawn1" cx="25.5" cy="8.5" r=".17"/>
+<circle class="m-spawn0" cx="1.5" cy="10.5" r=".17"/>
+<circle class="m-spawn1" cx="24.5" cy="10.5" r=".17"/>
+<circle class="m-spawn0" cx="1.5" cy="12.5" r=".17"/>
+<circle class="m-spawn1" cx="24.5" cy="12.5" r=".17"/>
+<path class="m-power" d="M9.5 3.12l.38 .38l-.38 .38l-.38 -.38z"/>
+<path class="m-power" d="M16.5 12.12l.38 .38l-.38 .38l-.38 -.38z"/>
+<circle class="m-tree" cx="12.5" cy="3.5" r="0.48"/>
+<text class="m-beat" x="12.5" y="3.68">30</text>
+<circle class="m-tree" cx="13.5" cy="12.5" r="0.48"/>
+<text class="m-beat" x="13.5" y="12.68">30</text>
+<circle class="m-tree" cx="10.5" cy="9.5" r="0.43"/>
+<text class="m-beat" x="10.5" y="9.68">60</text>
+<circle class="m-tree" cx="15.5" cy="6.5" r="0.43"/>
+<text class="m-beat" x="15.5" y="6.68">60</text>
+<circle class="m-tree" cx="3.5" cy="5.5" r="0.38"/>
+<text class="m-beat" x="3.5" y="5.68">90</text>
+<circle class="m-tree" cx="22.5" cy="10.5" r="0.38"/>
+<text class="m-beat" x="22.5" y="10.68">90</text>
+</svg>

@@ -473,13 +473,16 @@ pub struct MatchesQuery {
     pub page: Option<String>,
 }
 
-/// `GET /matches?team=<id>&season=<name>&page=<n>` (auth: none): newest
-/// first; every season unless `season` is given.
-pub async fn matches_route(
-    State(state): State<AppState>,
-    query: Result<Query<MatchesQuery>, QueryRejection>,
-) -> AppResult<Json<Value>> {
-    let Query(query) = query.map_err(|_| AppError(ErrorCode::BadRequest))?;
+/// What a `GET /matches` query asks for, checked.
+pub struct MatchesFilter {
+    pub page: i64,
+    pub team: Option<Uuid>,
+    pub season: Option<Season>,
+}
+
+/// The query of `GET /matches`: `bad_request` for a page below 1 or a team
+/// that is not a UUID, `not_found` for an unknown season.
+pub async fn matches_filter(db: &PgPool, query: &MatchesQuery) -> AppResult<MatchesFilter> {
     let page = page_param(query.page.as_deref())?;
     let team = match query.team.as_deref().filter(|t| !t.is_empty()) {
         Some(text) => Some(Uuid::parse_str(text).map_err(|_| AppError(ErrorCode::BadRequest))?),
@@ -487,19 +490,36 @@ pub async fn matches_route(
     };
     let season = match query.season.as_deref().filter(|s| !s.trim().is_empty()) {
         Some(name) => Some(
-            seasons::by_name(&state.db, name)
+            seasons::by_name(db, name)
                 .await?
-                .ok_or(AppError(ErrorCode::NotFound))?
-                .id,
+                .ok_or(AppError(ErrorCode::NotFound))?,
         ),
         None => None,
     };
-    let (matches, more) = list_matches(&state.db, team, season, page, MATCH_PAGE).await?;
+    Ok(MatchesFilter { page, team, season })
+}
+
+/// `GET /matches?team=<id>&season=<name>&page=<n>` (auth: none): newest
+/// first; every season unless `season` is given.
+pub async fn matches_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    query: Result<Query<MatchesQuery>, QueryRejection>,
+) -> AppResult<Response> {
+    let Query(query) = query.map_err(|_| AppError(ErrorCode::BadRequest))?;
+    if wants_html(&headers) {
+        return crate::portal::matches_page(&state, &query).await;
+    }
+    let filter = matches_filter(&state.db, &query).await?;
+    let season = filter.season.as_ref().map(|s| s.id);
+    let (matches, more) =
+        list_matches(&state.db, filter.team, season, filter.page, MATCH_PAGE).await?;
     Ok(Json(serde_json::json!({
-        "page": page,
+        "page": filter.page,
         "matches": matches,
-        "next": if more { Some(page + 1) } else { None },
-    })))
+        "next": if more { Some(filter.page + 1) } else { None },
+    }))
+    .into_response())
 }
 
 /// `GET /matches/{m}` (auth: none). It presigns the replay URL, so it counts

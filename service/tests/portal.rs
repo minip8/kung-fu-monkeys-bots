@@ -42,6 +42,77 @@ async fn signed_out_shows_both_providers(pool: PgPool) {
     assert!(html.contains("href=\"/auth/google\""));
     assert!(!html.contains("<script"));
     assert!(!html.contains("name=\"csrf\""));
+    // The landing page: what the contest is, the way in, the guide, and an
+    // empty board before any season.
+    assert!(html.contains("Bank the bananas."), "{html}");
+    assert!(html.contains("kfm submit --wait --activate"));
+    assert!(html.contains("href=\"/docs/contest\""));
+    assert!(html.contains("<svg class=\"map\""), "the grove drawing");
+    assert!(html.contains("No team has played in this season yet."));
+    assert!(html.contains("No game has been played yet."));
+}
+
+#[sqlx::test]
+async fn the_contest_guide_is_public_and_names_its_engine_release(pool: PgPool) {
+    let guide = kfm_ladder::portal::CONTEST_GUIDE_ENGINE;
+    // The test configuration plays another release than the guide's: it says so.
+    let app = start(pool.clone()).await;
+    let response = reqwest::get(format!("{}/docs/contest", app.base))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["content-type"],
+        "text/html; charset=utf-8"
+    );
+    assert!(response.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .contains("default-src 'none'"));
+    let html = response.text().await.unwrap();
+    assert!(!html.contains("<script"));
+    assert!(html.contains("The contest: bananas are the economy"));
+    assert!(html.contains(&format!("engine release <strong>{guide}</strong>")));
+    assert!(
+        html.contains("The ladder now plays engine release v0.5.1."),
+        "{html}"
+    );
+    assert_eq!(
+        html.matches("<svg class=\"map\"").count(),
+        4,
+        "the pool's four arenas"
+    );
+    for arena in ["grove", "orchards", "gorge", "burrows"] {
+        assert!(html.contains(&format!("<b>{arena}</b>")), "{arena}");
+    }
+    // The ladder's own numbers come from its configuration.
+    assert!(html.contains("Every 5 minutes"), "{html}");
+    assert!(html.contains("for 24 hours,"), "{html}");
+    // Every page's navigation and footer link to it.
+    let index = reqwest::get(format!("{}/", app.base))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(index.contains("<a class=\"n-guide\" href=\"/docs/contest\">Contest guide</a>"));
+
+    // On the guide's own release there is no notice.
+    let pinned = common::start_configured(pool, |c| {
+        c.engine_tag = guide.to_owned();
+        c.round_seconds = 1800;
+        c.replay_hours = 0;
+    })
+    .await;
+    let html = reqwest::get(format!("{}/docs/contest", pinned.base))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!html.contains("The ladder now plays"), "{html}");
+    assert!(html.contains("Every 30 minutes"), "{html}");
+    assert!(!html.contains("hours,"), "replays kept for ever: {html}");
 }
 
 #[sqlx::test]

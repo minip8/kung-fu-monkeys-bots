@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Kung Fu Monkeys ladder: {{ title }}{% endblock %}
+{% block page %}pg-ladder{% endblock %}
 {% block content %}
+<p class="eyebrow">Glicko-2 · engine {{ engine_tag }}</p>
 <h1>Ladder</h1>
 {% if let Some(season) = season %}
 <p class="sub">Season <strong>{{ season.name }}</strong>, {{ season.window }}{% if season.current %} (current){% else %} (frozen at its end){% endif %}, mode <code>{{ season.mode }}</code>. Glicko-2 ratings with their deviation; engine release {{ engine_tag }}.</p>
@@ -14,13 +16,19 @@
 {% if rows.is_empty() %}<p class="muted">No team has played in this season yet.</p>
 {% else %}
 <div class="scroll"><table>
-  <tr><th class="num">#</th><th>Team</th><th class="num">Rating</th><th class="num">RD</th><th class="num">Games</th><th class="num">W</th><th class="num">D</th><th class="num">L</th><th>Module</th></tr>
+  <tr><th class="num">#</th><th>Team</th><th class="num">Rating</th><th class="num">RD</th><th class="num">Games</th><th class="num">W</th><th class="num">D</th><th class="num">L</th><th>Record</th><th>Module</th></tr>
   {% for r in rows %}
-  <tr><td class="num">{{ r.rank }}</td><td>{{ r.name }}</td><td class="num">{{ r.rating }}</td><td class="num">{{ r.rd }}</td><td class="num">{{ r.games }}</td><td class="num">{{ r.wins }}</td><td class="num">{{ r.draws }}</td><td class="num">{{ r.losses }}</td><td>{% if !r.hash.is_empty() %}<code title="SHA-256 of the active module">{{ r.hash }}</code>{% endif %}</td></tr>
+  <tr{% if r.rank <= 3 %} class="top"{% endif %}><td class="rank num">{{ r.rank }}</td><td class="team"><a href="/matches?team={{ r.team_id }}" title="This team's games">{{ r.name }}</a></td><td class="num"><strong>{{ r.rating }}</strong></td><td class="num muted">± {{ r.rd }}</td><td class="num">{{ r.games }}</td><td class="num">{{ r.wins }}</td><td class="num">{{ r.draws }}</td><td class="num">{{ r.losses }}</td><td><span class="record" title="{{ r.wins }} won, {{ r.draws }} drawn, {{ r.losses }} lost"><i class="w" style="flex-grow:{{ r.wins }}"></i><i class="d" style="flex-grow:{{ r.draws }}"></i><i class="l" style="flex-grow:{{ r.losses }}"></i></span></td><td>{% if !r.hash.is_empty() %}<code title="SHA-256 of the active module">{{ r.hash }}</code>{% endif %}</td></tr>
   {% endfor %}
 </table></div>
 {% endif %}
 <p class="pages">{% if let Some(url) = prev %}<a href="{{ url }}">previous</a>{% endif %}{% if let Some(url) = next %}<a href="{{ url }}">next</a>{% endif %}</p>
 </section>
-<p class="muted">Teams are paired every round with up to a few neighbours by rating, each pair playing one game on an arena and sides drawn at random; a draw or a game the tick cap ended counts half.</p>
+{% if !games.is_empty() %}
+<section>
+  <div class="head-row"><h2>Latest games</h2><a href="{{ games_url }}">All games</a></div>
+  {% for g in games %}{% include "game_line.html" %}{% endfor %}
+</section>
+{% endif %}
+<p class="muted">Teams are paired every round with up to a few neighbours by rating, each pair playing one game on an arena and sides drawn at random; a draw or a game the tick cap ended counts half. How a game is played and scored is in the <a href="/docs/contest">contest guide</a>.</p>
 {% endblock %}

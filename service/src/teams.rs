@@ -164,6 +164,14 @@ async fn members(db: &PgPool, team: Uuid) -> AppResult<Vec<Member>> {
     .await?)
 }
 
+/// A team's name, or none when no team has the id (the games page's title).
+pub async fn team_name(db: &PgPool, id: Uuid) -> AppResult<Option<String>> {
+    Ok(sqlx::query_scalar("SELECT name FROM teams WHERE id = $1")
+        .bind(id)
+        .fetch_optional(db)
+        .await?)
+}
+
 pub async fn get_team(db: &PgPool, id: Uuid) -> AppResult<Team> {
     let row: Option<(String, OffsetDateTime)> =
         sqlx::query_as("SELECT name, created_at FROM teams WHERE id = $1")

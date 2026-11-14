@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Kung Fu Monkeys ladder: {{ title }}{% endblock %}
+{% block page %}pg-games{% endblock %}
+{% block content %}
+<p class="eyebrow">Ranked games</p>
+<h1>{{ title }}</h1>
+<p class="sub">{% if let Some(team) = team %}The games of <strong>{{ team }}</strong>{% else %}Every ranked game{% endif %}{% if let Some(season) = season %} of season <strong>{{ season }}</strong>{% endif %}, newest first. A game's page has its replay and its result. {% if filtered %}<a href="/matches">Every game</a>{% endif %}</p>
+<section>
+{% if games.is_empty() %}<p class="muted">No game here yet.</p>
+{% else %}
+<div class="scroll"><table>
+  <tr><th>Played</th><th>Arena</th><th>Side A</th><th class="num">Score</th><th>Side B</th><th class="num">Ticks</th><th></th></tr>
+  {% for g in games %}
+  <tr><td class="muted">{{ g.when }}</td><td>{% if !g.arena.is_empty() %}<code>{{ g.arena }}</code>{% endif %}</td><td{% if g.a_won %} class="team"{% endif %}>{{ g.a }}</td><td class="num"><strong>{{ g.a_score }} – {{ g.b_score }}</strong></td><td{% if g.b_won %} class="team"{% endif %}>{{ g.b }}</td><td class="num muted">{{ g.ticks }}{% if g.capped %} (cap){% endif %}</td><td><a href="/matches/{{ g.id }}">game</a></td></tr>
+  {% endfor %}
+</table></div>
+{% endif %}
+<p class="pages">{% if let Some(url) = prev %}<a href="{{ url }}">previous</a>{% endif %}{% if let Some(url) = next %}<a href="{{ url }}">next</a>{% endif %}</p>
+</section>
+<p class="muted">The winner is in bold; a game without one is a draw.</p>
+{% endblock %}

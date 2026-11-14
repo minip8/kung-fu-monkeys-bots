@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+{% block title %}The contest: Kung Fu Monkeys bot ladder{% endblock %}
+{% block page %}pg-guide{% endblock %}
+{% block content %}
+<p class="eyebrow">Contest guide · engine {{ guide_tag }}</p>
+<h1>The contest: bananas are the economy</h1>
+<p class="sub">Everything the ladder's game mode asks of a bot: how a game is won, where bananas come from, what a monkey can do and see, the four arenas, and where each of those is in the observation. The mode is the engine's <code>contest</code> row, of the <code>harvest</code> kind.</p>
+{% if stale %}
+<section class="notice">The ladder now plays engine release {{ engine_tag }}. This guide was written for {{ guide_tag }}: the rules are the same in kind, but check the numbers against that release's <a href="https://github.com/minip8/kung-fu-monkeys/blob/{{ engine_tag }}/content/modes.toml"><code>content/modes.toml</code></a>.</section>
+{% endif %}
+
+<div class="doc">
+<nav class="toc" aria-label="On this page">
+  <ol>
+    <li><a href="#glance">At a glance</a></li>
+    <li><a href="#win">Winning</a></li>
+    <li><a href="#economy">The banana economy</a></li>
+    <li><a href="#monkey">Moving and fighting</a></li>
+    <li><a href="#sight">Sight and calls</a></li>
+    <li><a href="#arenas">The four arenas</a></li>
+    <li><a href="#observation">In the observation</a></li>
+    <li><a href="#ladder">How the ladder plays it</a></li>
+    <li><a href="#local">Playing it yourself</a></li>
+    <li><a href="#follows">What follows from the rules</a></li>
+    <li><a href="#sources">Sources and changes</a></li>
+  </ol>
+</nav>
+
+<div class="prose">
+<section id="glance">
+  <h2><span class="n">01</span>At a glance</h2>
+  <p>Two teams of five monkeys play on a grid. Bananas grow on trees. A monkey picks them up, carries up to three, and banks them one at a time by standing in its team's home zone; each banked banana is a point. The same bananas are the only weapon: they are thrown (and come back, like a boomerang) and a dash with one in hand is an attack. The first team to 40 points wins.</p>
+  <div class="facts">
+    <div class="fact"><b>5 v 5</b><span>one module instance per monkey</span></div>
+    <div class="fact"><b>40</b><span>banked bananas to win</span></div>
+    <div class="fact"><b>3600</b><span>turns on the clock (60 a second)</span></div>
+    <div class="fact"><b>3</b><span>bananas in a hand</span></div>
+    <div class="fact"><b>2 HP</b><span>a hit takes one</span></div>
+    <div class="fact"><b>240</b><span>turns to respawn, empty-handed</span></div>
+  </div>
+  <p>A turn is one simulation tick: every monkey moves, at most one cell, every tick. Throughout this guide "turn" and "tick" are the same length of time.</p>
+</section>
+
+<section id="win">
+  <h2><span class="n">02</span>Winning</h2>
+  <ul>
+    <li>A team's score is the sum of its monkeys' scores: bananas banked, less bananas stolen from its home.</li>
+    <li>The first team to <strong>40</strong> wins at once.</li>
+    <li>Otherwise the team in the lead after <strong>3600 turns</strong> of play wins. A tied lead is a <strong>draw</strong>.</li>
+    <li>Several monkeys can bank on one turn, so both teams can pass 40 on the same turn: the higher score wins, and equal scores are a draw.</li>
+    <li>Eliminations score nothing. Neither does a catch. Both are paid in bananas instead: a kill drops the victim's cargo, a catch takes a banana out of the air.</li>
+  </ul>
+  <p>A game opens with a countdown of 60 ticks, every monkey on its spawn point and frozen, so a game that goes to the clock lasts 3660 ticks. A bot is asked for an input during the countdown too: it is free thinking time.</p>
+</section>
+
+<section id="economy">
+  <h2><span class="n">03</span>The banana economy</h2>
+  <h3>Supply</h3>
+  <p>Bananas enter a game in two ways only: the opening hands (each monkey starts with <strong>one</strong>) and the trees. An empty hand never grows a banana back, and a respawned monkey comes back with nothing.</p>
+  <p>A <strong>tree</strong> lays one banana on its own cell on its beat, while fewer than its capacity lie there. Its first fruit comes one interval into the game, so nothing lies on the ground at the whistle. Trees draw nothing at random: every beat is known from the first tick.</p>
+  <div class="scroll"><table>
+    <tr><th>Tree</th><th class="num">Bears every</th><th class="num">Holds</th><th>Where</th></tr>
+    <tr><td><strong>Rich</strong></td><td class="num">30 turns</td><td class="num">3</td><td>Between the homes, about as far from both. Not on every arena.</td></tr>
+    <tr><td><strong>Flank</strong></td><td class="num">60 turns</td><td class="num">2</td><td>Nearer one home than the other (on <code>orchards</code>, nearly equal).</td></tr>
+    <tr><td><strong>Home</strong></td><td class="num">90 turns</td><td class="num">1</td><td>Two or three steps from a home: where a respawned monkey rearms.</td></tr>
+  </table></div>
+  <p>A tree that is full wastes its beats, and fruit lying on a tree is there for either team.</p>
+
+  <h3>Carrying</h3>
+  <p>Walking onto a banana picks it up. A hand holds up to <strong>three</strong>; a pickup that holds more than the hand has room for fills the hand and leaves the rest lying. The hand is the cargo and the ammunition at once.</p>
+
+  <h3>Banking</h3>
+  <p>Team <em>t</em>'s home is zone <em>t</em> of the arena, a box of 3 by 2 cells: team 0's in the west, team 1's in the east. On every <strong>second turn</strong> (the bank beat) each living monkey standing in its own home with a banana in hand banks one: a banana fewer in its hand, a point on its score. Several monkeys bank on the same beat, an enemy standing in the zone stops nothing, and a banked banana leaves the game. Emptying a full hand takes three beats.</p>
+
+  <h3>Stealing</h3>
+  <p>On every <strong>sixth turn</strong> (the steal beat, after that turn's banking) each living monkey standing in the <em>enemy's</em> home with room in its hand takes one banana back out, if that team's score is above zero and <strong>none of that team's living monkeys stands in the zone</strong>. The point comes off the robbed team's highest-scoring monkey and the banana goes into the raider's hand, to carry home and bank. A raider takes at most one a beat.</p>
+  <div class="callout"><p>One living defender in the home, armed or not, stops every raider. An empty home loses a point every six turns to each raider standing in it.</p></div>
+  <p>Both beats are counted on the game clock, not per monkey, and are judged on where each monkey stands after that turn's move. A monkey falling into a pit stands nowhere.</p>
+</section>
+
+<section id="monkey">
+  <h2><span class="n">04</span>Moving and fighting</h2>
+  <h3>The grid</h3>
+  <p>Monkeys move on cells of one unit. Each turn a monkey at rest steps to one of its eight neighbouring cells, or stays. Monkeys may share a cell. When two contend for one cell, or try to swap, the earlier button press within the tick wins (the input's <code>subTick</code>); at an equal press the game draws the order at random. A banana pickup that several monkeys reach on one turn is drawn the same way. Bananas in flight do not move on the grid: they fly freely and bounce off walls.</p>
+
+  <h3>The kit</h3>
+  <div class="scroll"><table class="kv">
+    <tr><th>Action</th><th>What it does</th></tr>
+    <tr><td><strong>Dash</strong></td><td>Two cells in one turn, then 3 turns of cooldown (the catcher's: 4). With a banana in hand a dash is an <strong>attack</strong> on every enemy its path meets, for 1 HP; with an empty hand it only moves.</td></tr>
+    <tr><td><strong>Throw</strong></td><td>The banana leaves on the turn of the press, along the aim. The thrower is rooted for the next turn. Cooldown 1 turn, so a hand of three is three throws in six turns.</td></tr>
+    <tr><td><strong>Call</strong></td><td>Shouts one of 256 symbols to every monkey within 4 cells (<a href="#sight">below</a>).</td></tr>
+  </table></div>
+
+  <h3>The banana in flight</h3>
+  <p>A thrown banana flies at <strong>2 cells a turn</strong> for 3 turns, then turns for home at up to 85 degrees a turn and comes back to its thrower's hand, about 5 turns after the press. It hurts every enemy it touches, out and back (1 HP), and flies on through them. So a throw is a loan, unless:</p>
+  <ul>
+    <li>it is <strong>caught</strong> (below): the catcher keeps it;</li>
+    <li>its thrower <strong>dies</strong> or starts to fall: it comes down where it is, as a pickup;</li>
+    <li>it cannot get home for 240 turns: it is grounded as a pickup.</li>
+  </ul>
+
+  <h3>Hit points</h3>
+  <p>A monkey has <strong>2 HP</strong>. A hit that does not eliminate it staggers it for 6 turns. There is no friendly fire: a team's own bananas and dashes pass through its monkeys.</p>
+
+  <h3>The catcher</h3>
+  <p>The first monkey of each team (its lowest slot) is the <strong>catcher</strong>; the other four are standard. Only the catcher's dash has a perfect window: a dash that meets an enemy's banana in flight <strong>catches</strong> it, into the catcher's hand. A catch needs room: with a full hand the catch is declined and the banana hits. In this mode the catcher is the team's thief.</p>
+
+  <h3>Death, pits and respawn</h3>
+  <ul>
+    <li>An eliminated monkey <strong>drops its cargo</strong> where it stood, and its bananas in flight come down as pickups. A kill is worth what the victim carried.</li>
+    <li>A monkey whose whole body is over a pit, and that is not dashing, falls: it is out 36 ticks later and <strong>its cargo goes down with it</strong>. A dash crosses two cells.</li>
+    <li>It respawns after <strong>240 turns</strong> at a spawn point on its own side, with 8 turns of protection and an <strong>empty hand</strong>. It can stand in its home and stop thefts at once; it cannot strike until it finds a banana.</li>
+  </ul>
+
+  <h3>Power-ups</h3>
+  <p>Each arena has two power-up spawners (the diamonds on the maps): the first pickup at turn 90, then one every 240, one lying at a time. Which of the three it is is drawn at random and seen when the pickup is.</p>
+  <div class="scroll"><table>
+    <tr><th>Power-up</th><th class="num">Lasts</th><th>Effect</th></tr>
+    <tr><td><code>shield_1t</code></td><td class="num">90 turns</td><td>Absorbs the first hit, then is gone.</td></tr>
+    <tr><td><code>quick_hands_1t</code></td><td class="num">60 turns</td><td>A throw with no rooted turn after it.</td></tr>
+    <tr><td><code>big_banana_1t</code></td><td class="num">60 turns</td><td>The holder's bananas fly twice as wide at 0.85 of the speed.</td></tr>
+  </table></div>
+</section>
+
+<section id="sight">
+  <h2><span class="n">05</span>Sight and calls</h2>
+  <p>A bot sees through its own monkey's eyes only (<code>own</code> fog). Each of a team's five instances has its own view; teammates are seen exactly as enemies are, when they are in sight.</p>
+  <ul>
+    <li><strong>Around it:</strong> the eight cells next to the monkey, whatever it faces.</li>
+    <li><strong>The cone:</strong> 4 cells deep along the facing (one of eight directions), behind a clear line of sight; 5 deep for a monkey at rest that did not move on the previous turn. The facing is the input's aim, free to turn every tick.</li>
+    <li><strong>Bananas in flight</strong> are heard within 1 cell, whatever the facing and the walls, and a monkey always sees its own banana in flight and the cells next to it.</li>
+  </ul>
+  <p>What is not seen is zeroed in the observation: an unseen monkey keeps only its slot, team and respawn timer. At 2 cells a turn, a banana that is not in the cone is heard on the turn it arrives: where a monkey looks decides what it can dodge.</p>
+  <p><strong>Never hidden:</strong> the arena (walls, pits, trees, spawners), both home zones, the clock, every monkey's score, who is alive and every respawn timer. A score that rose on a bank beat says where that monkey stood; a top score that fell on a steal beat says that team's home is empty and has a raider in it. Both teams read the same board.</p>
+  <h3>Calls</h3>
+  <p>A call shouts the input's aim byte, one of 256 symbols, to every monkey within 4 cells, <strong>ally or enemy</strong>. It is heard in the next tick's observation, with the caller's slot and, when the hearer sees the caller, the caller's cell. What a symbol means is up to the bot's author; it is the only channel between a team's instances beyond what each one sees.</p>
+</section>
+
+<section id="arenas">
+  <h2><span class="n">06</span>The four arenas</h2>
+  <p>A ranked game is played on one of four arenas, drawn at random with the sides. Each is its own half turn: rotate it 180 degrees and team 0's side becomes team 1's, so neither side is favoured. Every one has a home zone and a home tree for each team, six trees and two power-up spawners.</p>
+  <ul class="legend">
+    <li><i style="background:var(--tree);border-radius:50%"></i>tree, with the turns between its fruit</li>
+    <li><i style="background:var(--t0-soft);border:1px solid var(--t0)"></i>home 0 and team 0's spawn points</li>
+    <li><i style="background:var(--t1-soft);border:1px solid var(--t1)"></i>home 1 and team 1's spawn points</li>
+    <li><i style="background:var(--wall)"></i>wall</li>
+    <li><i style="background:var(--pit)"></i>pit</li>
+    <li><i style="background:var(--power);transform:rotate(45deg) scale(.8)"></i>power-up spawner</li>
+  </ul>
+  <div class="maps">
+    <figure>{% include "maps/grove.svg" %}<figcaption><b>grove</b> · 24 × 14. Two rich trees on the centre cells, 6 steps from either home, so the fight is for the middle. A flank tree 4 steps from each home (9 from the other).</figcaption></figure>
+    <figure>{% include "maps/orchards.svg" %}<figcaption><b>orchards</b> · 28 × 16, the widest. No rich tree: four flank trees on the north and south edges, each 10 steps from one home and 11 from the other. Hedges cut the straight line between the homes, so both teams' routes cross.</figcaption></figure>
+    <figure>{% include "maps/gorge.svg" %}<figcaption><b>gorge</b> · 26 × 16. A band of pit four cells wide, wider than a dash, with two bridges that carry the rich trees (8 and 9 steps from the homes). A flank tree on each team's lip, 6 steps from its own home and 13 from the other.</figcaption></figure>
+    <figure>{% include "maps/burrows.svg" %}<figcaption><b>burrows</b> · 20 × 12, the smallest. A ring round the edge, a narrow lane between the homes, and trees at the ends of dead-end tunnels: one way in, one way out.</figcaption></figure>
+  </div>
+  <p>Distances are walking steps from the nearer home cell. A bot does not need any of this by heart: the walls, pits, trees and homes of the arena in play are in every observation, and the pool can change with an engine release.</p>
+</section>
+
+<section id="observation">
+  <h2><span class="n">07</span>In the observation</h2>
+  <p>Nothing about the mode needs a special API: it is all in the observation every bot already gets. The names below are the C SDK's (<code>sdk/c/kfm_bot.h</code>); the C++ layer reaches the same struct through <code>o.raw()</code>.</p>
+  <div class="scroll"><table class="kv">
+    <tr><th>What</th><th>Where</th></tr>
+    <tr><td>The mode</td><td><code>match.modeKind == KFM_MODE_HARVEST</code> (8)</td></tr>
+    <tr><td>My team, my hand</td><td><code>self.team</code>, <code>self.ammo</code> of <code>self.ammoMax</code> (3)</td></tr>
+    <tr><td>The homes</td><td><code>zones.zone[t]</code> for team <em>t</em>: a closed box, Q16.16. A monkey stands in it when its centre is inside. (C++: <code>o.zone(t)</code>.)</td></tr>
+    <tr><td>The trees</td><td>The entries of <code>arena.spawners</code> with <code>tree == 1</code>: <code>pos</code>, <code>firstTicks</code>, <code>intervalTicks</code>, <code>maxAlive</code>. Their fruit is an ordinary banana pickup in <code>pickups</code>, seen only when its cell is.</td></tr>
+    <tr><td>The beats</td><td><code>match.modeData[KFM_HARVEST_BEATS_WORD]</code>: <code>KFM_HARVEST_BANK_TICKS(word)</code> (2) and <code>KFM_HARVEST_STEAL_TICKS(word)</code> (6). A beat falls on the tick that takes <code>match.ticksInPhase</code> to a multiple.</td></tr>
+    <tr><td>The board</td><td><code>match.scores[slot]</code>, <code>match.teamScores[team]</code>, <code>match.scoreToWin</code> (40), <code>match.timeLimitTicks</code> (3600)</td></tr>
+    <tr><td>Who is out</td><td><code>match.aliveMask</code>, <code>match.respawnTicks[slot]</code></td></tr>
+    <tr><td>An enemy's cargo</td><td><code>players[i].ammo</code>, when that monkey is seen (<code>visible</code>)</td></tr>
+  </table></div>
+<pre><code>const kfm_observation&amp; raw = o.raw();
+if (raw.match.modeKind == KFM_MODE_HARVEST) {
+  uint32_t beats = raw.match.modeData[KFM_HARVEST_BEATS_WORD];
+  unsigned bank = KFM_HARVEST_BANK_TICKS(beats);    <span class="c">// 2</span>
+  unsigned steal = KFM_HARVEST_STEAL_TICKS(beats);  <span class="c">// 6</span>
+  const kfm_obs_zone&amp; home = raw.zones.zone[raw.self.team];
+  for (int i = 0; i &lt; raw.arena.spawnerCount; ++i) {
+    const kfm_obs_spawner&amp; s = raw.arena.spawners[i];
+    if (s.tree) { <span class="c">/* s.pos, s.intervalTicks, s.maxAlive */</span> }
+  }
+}</code></pre>
+  <p><strong>Not in the observation:</strong> how many bananas a stacked pickup holds, and that a respawn is empty-handed (a respawned monkey's <code>ammo</code> is simply 0). Read the numbers from the observation rather than writing them into the bot: the engine's plan is to tune them.</p>
+  <p>The normative description, field by field, is the engine's <a href="https://github.com/minip8/kung-fu-monkeys/blob/{{ guide_tag }}/docs/bot-abi.md"><code>docs/bot-abi.md</code></a>: §2 the observation, §3.1 fog, §3.2 calls, §3.3 this mode.</p>
+</section>
+
+<section id="ladder">
+  <h2><span class="n">08</span>How the ladder plays it</h2>
+  <ul>
+    <li><strong>One module, five monkeys.</strong> A team's active submission fills all five slots of its side, one instance per monkey, each with its own memory. Instances share nothing but what they see and what they call. The instance in the team's first slot is the catcher.</li>
+    <li><strong>Rounds.</strong> {% if round_minutes > 0 %}Every {{ round_minutes }} minutes{% else %}On a fixed interval{% endif %} every team with a ready, active submission is paired with up to {{ round_opponents }} teams near its rating.</li>
+    <li><strong>One game a pair</strong>, on an arena and with the sides drawn from the game's seed: over a season a team meets every arena from either side about equally often.</li>
+    <li><strong>Ratings</strong> are Glicko-2 per team and season. A win counts 1, a loss 0, a draw a half. A new team starts at 1500.</li>
+    <li><strong>The budget</strong> is 100 000 WebAssembly instructions per tick per monkey, counted in instructions, never in time. A tick over budget, a trap or a bad return costs that monkey the tick (it repeats its last input) and is recorded on the game as a fault; it does not forfeit the game.</li>
+    <li><strong>Everything is public and replayable.</strong> A game's page has its result, its seed and{% if replay_hours > 0 %}, for {{ replay_hours }} hours,{% endif %} its replay, which the game's own browser client plays back.</li>
+  </ul>
+  <p>The service's rules in full are in <a href="https://github.com/minip8/kung-fu-monkeys-bots/blob/main/docs/ladder-api.md"><code>docs/ladder-api.md</code></a> §9 (submissions) and §10 (rounds, games, ratings).</p>
+</section>
+
+<section id="local">
+  <h2><span class="n">09</span>Playing it yourself</h2>
+  <p><code>kfm test</code> plays ranked-shape games against the reference bots. For a closer look, the engine's headless runner <code>kfm_arena</code> (fetched by <code>kfm</code>, or by <code>tools/fetch_kfm_arena.sh</code> into <code>.kfm/</code>) plays the mode directly:</p>
+<pre><code>m=out/bot.wasm
+<span class="c"># 5v5 as ranked. Without --arena the runner cycles the pool:</span>
+<span class="c"># 8 rotated games are every arena from both sides.</span>
+.kfm/kfm_arena --mode contest --team $m,$m,$m,$m,$m --team ref:hard --matches 8 --rotate
+<span class="c"># One arena, with a replay to watch and the bot's kfm_log output.</span>
+.kfm/kfm_arena --mode contest --arena gorge --team $m,$m,$m,$m,$m --team ref:hard \
+  --replay out/gorge.kfmr --log</code></pre>
+  <p>The reference bots (<code>ref:easy</code>, <code>ref:medium</code>, <code>ref:hard</code>) fight but ignore trees and homes: they are a check that a bot survives, not a measure of how well it harvests. The smallest bot that plays the economy is the engine's <a href="https://github.com/minip8/kung-fu-monkeys/blob/{{ guide_tag }}/tools/bots/examples/gatherer.c"><code>gatherer.c</code></a>: it fetches the nearest banana it sees, waits at a tree its team shares out, carries a full hand home and stands there until it is banked. The example bots of the bots repository were written before these rules: they move, see and fight correctly, and make no effort to gather or bank.</p>
+</section>
+
+<section id="follows">
+  <h2><span class="n">10</span>What follows from the rules</h2>
+  <p>Not rules, but arithmetic the rules imply. A bot may of course disagree.</p>
+  <ul>
+    <li><strong>The stream is fixed.</strong> Trees bear on a clock and stop when full, so two teams divide one supply. A banana taken from a tree the other team would have reached is worth two: one more here, one fewer there.</li>
+    <li><strong>Carrying is cheap; the split is what is fought over.</strong> On <code>grove</code> a monkey walks to a rich tree and back in 12 turns and banks a full hand in 6, while that tree bears one banana in 30. Five monkeys cannot all be usefully carrying.</li>
+    <li><strong>Banking disarms.</strong> A monkey that banks its last banana cannot dash-attack or throw until it picks another up.</li>
+    <li><strong>A full hand cannot catch.</strong> A catcher that wants the enemy's banana needs room for it.</li>
+    <li><strong>Cargo is a liability.</strong> A carrier that dies hands its bananas to whoever picks them up, and its team plays four against five for 240 turns.</li>
+    <li><strong>The home is a bank with one guard rule.</strong> Any living teammate in the zone, even unarmed and just respawned, closes it to every raider.</li>
+    <li><strong>Facing is defence.</strong> A banana outside the cone arrives unannounced.</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2><span class="n">11</span>Sources and changes</h2>
+  <p>This guide describes the contest as of engine release <strong>{{ guide_tag }}</strong>. The rules are the engine's content, which is public and hashed into every game: where this page and the content disagree, the content is right.</p>
+  <ul>
+    <li><a href="https://github.com/minip8/kung-fu-monkeys/blob/{{ guide_tag }}/content/modes.toml"><code>content/modes.toml</code></a>: the <code>contest</code> row, every number above.</li>
+    <li><a href="https://github.com/minip8/kung-fu-monkeys/tree/{{ guide_tag }}/content/arenas"><code>content/arenas/</code></a>: <code>11-grove.toml</code> to <code>14-burrows.toml</code>, the maps as tilemaps.</li>
+    <li><a href="https://github.com/minip8/kung-fu-monkeys/blob/{{ guide_tag }}/docs/bot-abi.md"><code>docs/bot-abi.md</code></a>: the bot ABI and the observation, normative.</li>
+    <li><a href="https://github.com/minip8/kung-fu-monkeys/blob/{{ guide_tag }}/docs/architecture.md"><code>docs/architecture.md</code></a> §11, "Contest design: bananas as the economy": why the rules are what they are.</li>
+  </ul>
+  <p>The numbers (the beats, the score to win, the trees, the respawn) are not yet balanced against measurements and may be tuned by a later engine release; an arena may be redrawn or the pool changed. A season carries its ratings across such a release, with each team's rating deviation widened before its first game on the new one.</p>
+</section>
+</div>
+</div>
+{% endblock %}
