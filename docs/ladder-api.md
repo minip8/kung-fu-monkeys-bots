@@ -1,4 +1,4 @@
-# Kung Fu Monkeys ladder API v1.7
+# Kung Fu Monkeys ladder API v1.8
 
 Status: normative, append-only from v1.0 (2026-11-07, M7 step 3a, engine architecture v0.63);
 v1.1 (2026-11-07, M7 step 3b) serves submissions; v1.2 (2026-11-07, M7 step 4) serves seasons,
@@ -8,11 +8,12 @@ the routes that presign per client (§2) and serves the privacy page (§8); v1.5
 engine architecture v0.78) holds an account to one team, an operator's excepted (§7); v1.6
 (2026-11-13, engine architecture v0.83) plays a pair as one game on an arena and sides drawn
 from its seed, and names a game's arena (§10.3, §10.6); v1.7 (2026-11-14) is the site: a
-landing page, the contest guide and the games as a page (§8), with no JSON route changed.
+landing page, the contest guide and the games as a page (§8), with no JSON route changed;
+v1.8 (2026-11-14) serves the site's icon (§8).
 The design and its rationale are the engine's `docs/architecture.md` §8 "The ladder" and §11
 "M7 step 3 design". This file is the HTTP surface shared by the service (`service/`, the
 `kfm-ladder` binary), its portal and the `kfm` command line tool; change it here first. Every
-route below is served as of v1.7.
+route below is served as of v1.8.
 
 ## 1. Transport and conventions
 
@@ -375,6 +376,7 @@ The portal is the same service rendered as HTML (askama templates, no JavaScript
 | `GET /` | Signed out: the landing page (v1.7): what the contest is, the quick start, sign in with GitHub or Google, and from the current season (else the one that started last) the top five of the board and the five latest games. Signed in: the account and its identities (a link button for the provider not yet linked), tokens (create, revoke), teams (create, shown to an account without a team and to an operator, v1.5; add member, leave or remove) and each team's submissions (upload, the list with state, module hash, error, ranked games and faults and a link to the log, an Activate button on ready ones, the active one marked; v1.1), its standing in the current season and its last ten games with links to their pages (v1.2). Shows `?error=<code>` as the code's message (with the `&detail=` text for `bad_manifest` and `bad_source`, v1.1) and `?linked=<provider>` as a notice. |
 | `GET /privacy` | The privacy page (v1.4): who runs the service (`KFM_LADDER_CONTACT`), what it stores and why, what it does not, IP addresses, the third parties, how to have data deleted. Public; every portal page's footer links to it. |
 | `GET /docs/contest` | The contest guide (v1.7): the rules of the `contest` mode as an entrant needs them, its arenas drawn, what a bot sees and where each of these is in the observation, and how the ladder plays it. Public. It names the engine release it was written for and says so when the service plays another (`KFM_LADDER_ENGINE_TAG`); the engine's content and its `docs/bot-abi.md` stay normative. |
+| `GET /favicon.svg`, `GET /favicon.ico` | The site's icon (v1.8), the header's mark: `image/svg+xml` and `image/x-icon` (16, 32 and 48 pixels), `Cache-Control: public, max-age=86400`. Public. Every page links both. |
 | `GET /ladder` | With `Accept: text/html` (a browser): the board of §10.5 as a page, paged, with links to every season (v1.2), each team's name linking to its games, and the season's eight latest games (v1.7). |
 | `GET /matches` | With `Accept: text/html` (v1.7): the list of §10.6 as a page, 25 games a page, with the same `team`, `season` and `page` parameters and the same errors. |
 | `GET /matches/{m}` | With `Accept: text/html`: the game's page: both sides with score, kills, deaths, rating change and faults, the replay's download link, the viewer link, the seed and hashes to re-run it, and the raw result (v1.2). |
@@ -391,7 +393,7 @@ authenticated by the session cookie only, and carry the session's CSRF token in 
 answers `303` to `/` on success and to `/?error=<code>` on failure (the codes of §2;
 `/?error=<code>&detail=<text>` for a refused upload), except a created token, which renders the
 page (`200`). Portal pages are sent with `Cache-Control: no-store`, a `Content-Security-Policy` that
-allows no script, `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. The
+allows no script and no load but an image from the service itself (the icon, v1.8), `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. The
 `/portal/...` routes are for the portal's own forms; programs use the JSON routes. `GET /ladder`,
 `GET /matches` (v1.7) and `GET /matches/{m}` answer HTML only to a request whose `Accept` header lists `text/html` (what a
 browser's navigation sends); without it, or with `*/*` or `application/json`, they answer the
@@ -793,6 +795,7 @@ presigned URL, so the bucket must allow that origin's GET (CORS, `deploy/README.
 | v1.5 | One team per account (§7): `POST /teams` and `POST /teams/{id}/members` refuse a second membership with the new code `already_in_team` (a rule tightened, no route or key changed; memberships from before stay); operators, set by `kfm-ladder operator add|remove|list` on the VM, are excepted and own the house teams; `GET /me` gains `operator`; the portal shows the create-team form only to an account that may use it. |
 | v1.6 | A pair is one game (§10.3): the match job runs `--matches 1` on an arena of the mode's pool and with the sides drawn from the job's seed, where it ran `--matches 2 --rotate` (both sides, always the pool's first arena); the worker asks the runner for the pool. A match object gains `arena` (§10.6); its `game` is 0 from here on. No route changed; games recorded before keep their `game` 0 or 1. |
 | v1.7 | The site (§8): `GET /` signed out is a landing page; `GET /docs/contest`, the contest guide; `GET /matches` answers HTML to a browser as `GET /ladder` and `GET /matches/{m}` do, and the board's page lists the season's latest games. No JSON route, key or code changed. |
+| v1.8 | The site's icon (§8): `GET /favicon.svg` and `GET /favicon.ico`, linked from every page, whose `Content-Security-Policy` gains `img-src 'self'` for it. |
 
 ## 12. Configuration of the binary
 

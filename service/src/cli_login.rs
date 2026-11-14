@@ -182,7 +182,7 @@ struct ConfirmView {
 /// The CLI page may redirect its form to the CLI's listener, so its
 /// `form-action` names `http://127.0.0.1:*` beside `'self'` (browsers apply
 /// `form-action` to a form's redirects too).
-const CLI_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; \
+const CLI_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; \
      form-action 'self' http://127.0.0.1:*; frame-ancestors 'none'; base-uri 'none'";
 
 fn render(status: StatusCode, page: CliPage) -> AppResult<Response> {
