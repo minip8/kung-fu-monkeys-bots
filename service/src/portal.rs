@@ -50,6 +50,7 @@ pub fn routes() -> Router<AppState> {
         .route("/portal/tokens", post(create_token))
         .route("/portal/tokens/{id}/revoke", post(revoke_token))
         .route("/portal/teams", post(create_team))
+        .route("/portal/teams/{id}/rename", post(rename_team))
         .route("/portal/teams/{id}/members", post(add_member))
         .route(
             "/portal/teams/{id}/members/{user}/remove",
@@ -553,6 +554,24 @@ async fn create_team(
         async {
             let session = form_session(session, &form.csrf)?;
             teams::create_team(&state.db, session.user_id, &form.name)
+                .await
+                .map(|_| ())
+        }
+        .await,
+    )
+}
+
+/// `POST /portal/teams/{id}/rename`: form `csrf`, `name` (v1.9).
+async fn rename_team(
+    State(state): State<AppState>,
+    MaybeSession(session): MaybeSession,
+    ApiPath(id): ApiPath<Uuid>,
+    FormBody(form): FormBody<TeamForm>,
+) -> Response {
+    done(
+        async {
+            let session = form_session(session, &form.csrf)?;
+            teams::rename_team(&state.db, session.user_id, id, &form.name)
                 .await
                 .map(|_| ())
         }

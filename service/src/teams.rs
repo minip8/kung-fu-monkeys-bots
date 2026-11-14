@@ -1,7 +1,8 @@
 //! Teams: the ladder's entrants. A team has owners and members; the creator
-//! is its owner; an owner adds members; a member leaves (or an owner removes
-//! them); the last owner cannot leave. An account is in at most one team
-//! (v1.5), unless it is an operator's (`users.operator`): the house teams.
+//! is its owner; an owner adds members and renames the team (v1.9); a member
+//! leaves (or an owner removes them); the last owner cannot leave. An account
+//! is in at most one team (v1.5), unless it is an operator's
+//! (`users.operator`): the house teams.
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -212,6 +213,33 @@ async fn lock_team(
     Ok(role.map(|(r,)| r))
 }
 
+/// An owner renames the team (v1.9), under the rules of a new team's name.
+/// The team's own row is not in the unique index's way, so a change of case
+/// alone goes through and the name it has changes nothing. Names are read
+/// from this row wherever a team is shown (the board, a game's sides), so
+/// nothing else is written: no former name is kept.
+pub async fn rename_team(db: &PgPool, caller: Uuid, team: Uuid, name: &str) -> AppResult<Team> {
+    let mut tx = db.begin().await?;
+    if lock_team(&mut tx, team, caller).await?.as_deref() != Some("owner") {
+        return Err(AppError(ErrorCode::Forbidden));
+    }
+    let name = clean_name(name)?;
+    let renamed = sqlx::query("UPDATE teams SET name = $2 WHERE id = $1")
+        .bind(team)
+        .bind(&name)
+        .execute(&mut *tx)
+        .await;
+    match renamed {
+        Ok(_) => {}
+        Err(err) if is_unique_violation(&err, "teams_name_lower") => {
+            return Err(AppError(ErrorCode::NameTaken))
+        }
+        Err(err) => return Err(err.into()),
+    }
+    tx.commit().await?;
+    get_team(db, team).await
+}
+
 /// An owner adds the user named by `reference` (an id or a display name) as a member.
 pub async fn add_member(db: &PgPool, caller: Uuid, team: Uuid, reference: &str) -> AppResult<Team> {
     let mut tx = db.begin().await?;
@@ -295,6 +323,11 @@ pub struct CreateRequest {
 }
 
 #[derive(Deserialize)]
+pub struct RenameRequest {
+    pub name: String,
+}
+
+#[derive(Deserialize)]
 pub struct AddMemberRequest {
     pub user: String,
 }
@@ -327,6 +360,20 @@ pub async fn show(
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<Json<Team>> {
     Ok(Json(get_team(&state.db, id).await?))
+}
+
+/// `PATCH /teams/{id}` (session + CSRF header, an owner): a new name.
+pub async fn rename_route(
+    State(state): State<AppState>,
+    caller: Caller,
+    headers: HeaderMap,
+    ApiPath(id): ApiPath<Uuid>,
+    JsonBody(body): JsonBody<RenameRequest>,
+) -> AppResult<Json<Team>> {
+    caller.session_write(&headers)?;
+    Ok(Json(
+        rename_team(&state.db, caller.user_id, id, &body.name).await?,
+    ))
 }
 
 /// `POST /teams/{id}/members` (session + CSRF header, an owner).

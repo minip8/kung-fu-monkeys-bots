@@ -1,4 +1,4 @@
-# Kung Fu Monkeys ladder API v1.8
+# Kung Fu Monkeys ladder API v1.9
 
 Status: normative, append-only from v1.0 (2026-11-07, M7 step 3a, engine architecture v0.63);
 v1.1 (2026-11-07, M7 step 3b) serves submissions; v1.2 (2026-11-07, M7 step 4) serves seasons,
@@ -9,11 +9,12 @@ engine architecture v0.78) holds an account to one team, an operator's excepted 
 (2026-11-13, engine architecture v0.83) plays a pair as one game on an arena and sides drawn
 from its seed, and names a game's arena (§10.3, §10.6); v1.7 (2026-11-14) is the site: a
 landing page, the contest guide and the games as a page (§8), with no JSON route changed;
-v1.8 (2026-11-14) serves the site's icon (§8).
+v1.8 (2026-11-14) serves the site's icon (§8); v1.9 (2026-11-14) lets an owner rename a team
+(§7).
 The design and its rationale are the engine's `docs/architecture.md` §8 "The ladder" and §11
 "M7 step 3 design". This file is the HTTP surface shared by the service (`service/`, the
 `kfm-ladder` binary), its portal and the `kfm` command line tool; change it here first. Every
-route below is served as of v1.8.
+route below is served as of v1.9.
 
 ## 1. Transport and conventions
 
@@ -309,6 +310,8 @@ rating belong to the team (§9), so a member leaves without anything being rotat
 A team name is trimmed and then 3 to 32 characters of ASCII letters, digits, space, `-`, `_`
 and `.`, starting and ending with a letter or digit, with no double space (`invalid_name`).
 Names are unique ignoring case (`name_taken`). A team has at most 32 members (`limit_reached`).
+A name is a label an owner may change (v1.9, below); a team is identified by its `id`, which
+never changes.
 
 **One team per account (v1.5).** An account is a member of at most one team, as owner or
 member: an entrant is a team and the rating is the team's, so an account in two teams would be
@@ -352,6 +355,7 @@ A team object:
 | `POST /teams` | session | `{"name":"Banana Squad"}` | `201`, the team. `already_in_team` if the caller is in a team and no operator (v1.5). |
 | `GET /teams` | any | | `200 {"teams":[{"id","name","role","created_at"}…]}`: the caller's teams, by name, `role` the caller's. |
 | `GET /teams/{id}` | none | | `200`, the team (teams are public). |
+| `PATCH /teams/{id}` | session | `{"name":"Banana Republic"}` | `200`, the team under its new name (v1.9). |
 | `POST /teams/{id}/members` | session | `{"user":"<id or display name>"}` | `200`, the team. |
 | `DELETE /teams/{id}/members/{user}` | session | | `204`. |
 
@@ -360,6 +364,15 @@ exist). `user` is a user id, or a display name compared ignoring case (`unknown_
 `ambiguous_user` if several share it). The user joins at once as a `member` (`already_member`
 if they are one; `already_in_team` if they are in another team and no operator, v1.5). There is
 no invitation to accept in v1.0.
+
+Renaming (v1.9): the caller must be an owner (`forbidden`; `not_found` if the team does not
+exist). The new name follows the rules of a new team's (`invalid_name`) and must not be another
+team's (`name_taken`); the team's own name is not in its way, so a change of case alone is a
+rename, and the name it already has is answered `200` and changes nothing. Nothing else about
+the team changes: its id, members, submissions, active bot, rating and games stay. The service
+keeps no former names: the board and every game, those played before the rename included, show
+the new one, and the old one is free for any team to take at once. There is no limit on how
+often a team is renamed.
 
 Removing a member: the caller removes themself (leaves) or is an owner (`forbidden`
 otherwise); `{user}` must be a member (`not_found`). An owner may leave, or be removed, only
@@ -373,7 +386,7 @@ The portal is the same service rendered as HTML (askama templates, no JavaScript
 
 | Method and path | What |
 |---|---|
-| `GET /` | Signed out: the landing page (v1.7): what the contest is, the quick start, sign in with GitHub or Google, and from the current season (else the one that started last) the top five of the board and the five latest games. Signed in: the account and its identities (a link button for the provider not yet linked), tokens (create, revoke), teams (create, shown to an account without a team and to an operator, v1.5; add member, leave or remove) and each team's submissions (upload, the list with state, module hash, error, ranked games and faults and a link to the log, an Activate button on ready ones, the active one marked; v1.1), its standing in the current season and its last ten games with links to their pages (v1.2). Shows `?error=<code>` as the code's message (with the `&detail=` text for `bad_manifest` and `bad_source`, v1.1) and `?linked=<provider>` as a notice. |
+| `GET /` | Signed out: the landing page (v1.7): what the contest is, the quick start, sign in with GitHub or Google, and from the current season (else the one that started last) the top five of the board and the five latest games. Signed in: the account and its identities (a link button for the provider not yet linked), tokens (create, revoke), teams (create, shown to an account without a team and to an operator, v1.5; add member, leave or remove; rename, shown to an owner, v1.9) and each team's submissions (upload, the list with state, module hash, error, ranked games and faults and a link to the log, an Activate button on ready ones, the active one marked; v1.1), its standing in the current season and its last ten games with links to their pages (v1.2). Shows `?error=<code>` as the code's message (with the `&detail=` text for `bad_manifest` and `bad_source`, v1.1) and `?linked=<provider>` as a notice. |
 | `GET /privacy` | The privacy page (v1.4): who runs the service (`KFM_LADDER_CONTACT`), what it stores and why, what it does not, IP addresses, the third parties, how to have data deleted. Public; every portal page's footer links to it. |
 | `GET /docs/contest` | The contest guide (v1.7): the rules of the `contest` mode as an entrant needs them, its arenas drawn, what a bot sees and where each of these is in the observation, and how the ladder plays it. Public. It names the engine release it was written for and says so when the service plays another (`KFM_LADDER_ENGINE_TAG`); the engine's content and its `docs/bot-abi.md` stay normative. |
 | `GET /favicon.svg`, `GET /favicon.ico` | The site's icon (v1.8), the header's mark: `image/svg+xml` and `image/x-icon` (16, 32 and 48 pixels), `Cache-Control: public, max-age=86400`. Public. Every page links both. |
@@ -383,6 +396,7 @@ The portal is the same service rendered as HTML (askama templates, no JavaScript
 | `POST /portal/tokens` | Form `csrf`, `name`, `scope`: creates a token and renders `/` with its secret, once. |
 | `POST /portal/tokens/{id}/revoke` | Form `csrf`. |
 | `POST /portal/teams` | Form `csrf`, `name`. |
+| `POST /portal/teams/{id}/rename` | Form `csrf`, `name` (v1.9). |
 | `POST /portal/teams/{id}/members` | Form `csrf`, `user`. |
 | `POST /portal/teams/{id}/members/{user}/remove` | Form `csrf` (leave when `{user}` is the caller). |
 | `POST /portal/teams/{id}/submissions` | `multipart/form-data`: `csrf`, `language` (`cpp` or `c`), `entry` (empty for `.`) and the file `source.zip`; the manifest is made from the two fields (v1.1). |
@@ -796,6 +810,7 @@ presigned URL, so the bucket must allow that origin's GET (CORS, `deploy/README.
 | v1.6 | A pair is one game (§10.3): the match job runs `--matches 1` on an arena of the mode's pool and with the sides drawn from the job's seed, where it ran `--matches 2 --rotate` (both sides, always the pool's first arena); the worker asks the runner for the pool. A match object gains `arena` (§10.6); its `game` is 0 from here on. No route changed; games recorded before keep their `game` 0 or 1. |
 | v1.7 | The site (§8): `GET /` signed out is a landing page; `GET /docs/contest`, the contest guide; `GET /matches` answers HTML to a browser as `GET /ladder` and `GET /matches/{m}` do, and the board's page lists the season's latest games. No JSON route, key or code changed. |
 | v1.8 | The site's icon (§8): `GET /favicon.svg` and `GET /favicon.ico`, linked from every page, whose `Content-Security-Policy` gains `img-src 'self'` for it. |
+| v1.9 | Renaming a team (§7): `PATCH /teams/{id}` with `{"name"}`, an owner through the session, answers the team; the portal's rename form, `POST /portal/teams/{id}/rename` (§8). No key or code is new: a team's `name` may now change, its `id` never does. |
 
 ## 12. Configuration of the binary
 

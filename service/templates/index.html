@@ -78,6 +78,11 @@
       <input type="text" name="user" placeholder="User id or name" required>
       <button type="submit">Add member</button>
     </form>
+    <form class="row" method="post" action="/portal/teams/{{ team.id }}/rename">
+      <input type="hidden" name="csrf" value="{{ user.csrf }}">
+      <input type="text" name="name" placeholder="New team name (3 to 32 characters)" minlength="3" maxlength="32" required>
+      <button type="submit">Rename team</button>
+    </form>
     {% endif %}
     <h3>Ladder</h3>
     {% if team.rating.is_empty() %}<p class="muted">Not rated in the current season yet: once a ready submission is active, the scheduler pairs the team in its next round.</p>

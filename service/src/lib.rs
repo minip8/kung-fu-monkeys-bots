@@ -102,7 +102,7 @@ pub fn routes() -> Router<AppState> {
         .route("/tokens", get(tokens::list).post(tokens::create))
         .route("/tokens/{id}", delete(tokens::revoke))
         .route("/teams", get(teams::list_mine).post(teams::create))
-        .route("/teams/{id}", get(teams::show))
+        .route("/teams/{id}", get(teams::show).patch(teams::rename_route))
         .route(
             "/teams/{id}/submissions",
             get(submissions::list).post(submissions::create).layer(
