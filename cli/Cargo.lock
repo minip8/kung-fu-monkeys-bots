@@ -786,7 +786,7 @@ dependencies = [
 
 [[package]]
 name = "kfm-cli"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "axum",
  "clap",
