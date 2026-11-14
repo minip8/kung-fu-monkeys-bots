@@ -38,6 +38,13 @@ async fn signed_out_shows_both_providers(pool: PgPool) {
         .contains("default-src 'none'"));
     assert_eq!(headers["x-content-type-options"], "nosniff");
     let html = response.text().await.unwrap();
+    // The icon is the one thing a page loads, from the service itself.
+    assert!(headers["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .contains("img-src 'self'"));
+    assert!(html.contains("<link rel=\"icon\" href=\"/favicon.svg\" type=\"image/svg+xml\">"));
+    assert!(html.contains("<link rel=\"icon\" href=\"/favicon.ico\" sizes=\"32x32\">"));
     assert!(html.contains("href=\"/auth/github\""));
     assert!(html.contains("href=\"/auth/google\""));
     assert!(!html.contains("<script"));
@@ -467,4 +474,42 @@ async fn the_create_team_form_is_for_an_account_without_a_team(pool: PgPool) {
         .post_form("/portal/teams", &[("csrf", &csrf), ("name", "Another")])
         .await;
     assert_eq!(location(&response), "/");
+}
+
+#[sqlx::test]
+async fn the_favicon_is_served_as_svg_and_ico(pool: PgPool) {
+    let app = start(pool).await;
+    let svg = reqwest::get(format!("{}/favicon.svg", app.base))
+        .await
+        .unwrap();
+    assert_eq!(svg.status(), StatusCode::OK);
+    assert_eq!(svg.headers()["content-type"], "image/svg+xml");
+    assert_eq!(svg.headers()["cache-control"], "public, max-age=86400");
+    assert_eq!(svg.headers()["x-content-type-options"], "nosniff");
+    let text = svg.text().await.unwrap();
+    assert!(text.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\""));
+    assert!(!text.contains("<script"));
+    // The mark is the header's: the same banana on every page.
+    let path = text
+        .split("<path d=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("the icon has a path");
+    let index = reqwest::get(format!("{}/", app.base))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(index.contains(path), "the header draws the icon's banana");
+
+    let ico = reqwest::get(format!("{}/favicon.ico", app.base))
+        .await
+        .unwrap();
+    assert_eq!(ico.status(), StatusCode::OK);
+    assert_eq!(ico.headers()["content-type"], "image/x-icon");
+    let bytes = ico.bytes().await.unwrap();
+    // An ICO directory: reserved 0, type 1 (icon), then the image count.
+    assert_eq!(&bytes[..4], &[0, 0, 1, 0]);
+    assert_eq!(bytes[4], 3, "16, 32 and 48 pixels");
 }

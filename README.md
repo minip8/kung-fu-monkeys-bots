@@ -45,6 +45,7 @@ built as C.
 | `tools/build.sh` | The build recipe: `tools/build.sh <bot dir> <out.wasm>`. |
 | `tools/fetch_kfm_arena.sh` | Fetches the engine's released headless `kfm_arena` for the pinned engine into `.kfm/`. |
 | `tools/contest_maps.py` | Draws the contest's arenas from an engine checkout's content, for the site's contest guide. |
+| `tools/favicon.py` | Generates the site's icon (`service/assets/favicon.svg` and `.ico`). |
 | `docs/build.md` | The recipe in full, the build sandbox, the engine pin and CI. |
 | `service/` | The ladder service, `kfm-ladder` (Rust): accounts, tokens, teams, submissions built in the sandbox, seasons, scheduled matches, Glicko-2 ratings, replays and the ladder. `service/README.md` says how to run and test it. |
 | `docs/ladder-api.md` | The ladder's HTTP API, normative: every route, its auth, its JSON and its errors. |
