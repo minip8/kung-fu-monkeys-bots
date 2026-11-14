@@ -282,6 +282,70 @@ async fn team_forms_create_add_and_leave(pool: PgPool) {
 }
 
 #[sqlx::test]
+async fn the_rename_form_is_an_owners(pool: PgPool) {
+    let app = start(pool).await;
+    let mut owner = github_browser(&app, 4040, "namer").await;
+    let mut mate = github_browser(&app, 4041, "named").await;
+    let mut rival = github_browser(&app, 4042, "rival").await;
+    let team = common::new_team(&mut owner, "First Draft").await;
+    common::new_team(&mut rival, "Taken Name").await;
+    let csrf = csrf_in(&page(&mut owner, "/").await);
+    let response = owner
+        .post_form(
+            &format!("/portal/teams/{team}/members"),
+            &[("csrf", &csrf), ("user", "named")],
+        )
+        .await;
+    assert_eq!(location(&response), "/");
+
+    let action = format!("action=\"/portal/teams/{team}/rename\"");
+    assert!(page(&mut owner, "/").await.contains(&action));
+    let response = owner
+        .post_form(
+            &format!("/portal/teams/{team}/rename"),
+            &[("csrf", &csrf), ("name", "Final Cut")],
+        )
+        .await;
+    assert_eq!(location(&response), "/");
+    let html = page(&mut owner, "/").await;
+    assert!(html.contains("Final Cut"));
+    assert!(!html.contains("First Draft"));
+
+    // A refused name comes back as its code's message and changes nothing.
+    let response = owner
+        .post_form(
+            &format!("/portal/teams/{team}/rename"),
+            &[("csrf", &csrf), ("name", "taken name")],
+        )
+        .await;
+    assert_eq!(location(&response), "/?error=name_taken");
+    let html = page(&mut owner, "/?error=name_taken").await;
+    assert!(html.contains("That team name is taken."));
+    assert!(html.contains("Final Cut"));
+    let response = owner
+        .post_form(
+            &format!("/portal/teams/{team}/rename"),
+            &[("csrf", "not-it"), ("name", "Forged")],
+        )
+        .await;
+    assert_eq!(location(&response), "/?error=bad_csrf");
+
+    // A member sees the new name and no form, and the route refuses them.
+    let mate_html = page(&mut mate, "/").await;
+    assert!(mate_html.contains("Final Cut"));
+    assert!(!mate_html.contains(&action));
+    let mate_csrf = csrf_in(&mate_html);
+    let response = mate
+        .post_form(
+            &format!("/portal/teams/{team}/rename"),
+            &[("csrf", &mate_csrf), ("name", "Mutiny")],
+        )
+        .await;
+    assert_eq!(location(&response), "/?error=forbidden");
+    assert!(page(&mut owner, "/").await.contains("Final Cut"));
+}
+
+#[sqlx::test]
 async fn names_are_escaped(pool: PgPool) {
     let app = start(pool).await;
     let mut browser = Browser::new(&app);

@@ -1,8 +1,9 @@
-//! Teams: create, list, show, add members, leave and remove, the last-owner rule.
+//! Teams: create, list, show, rename, add members, leave and remove, the
+//! last-owner rule.
 
 mod common;
 
-use common::{error_code, github_browser, start, Browser};
+use common::{bearer_json, error_code, github_browser, new_token, start, Browser};
 use reqwest::{Method, StatusCode};
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -13,6 +14,18 @@ async fn create_team(browser: &mut Browser, name: &str) -> reqwest::Response {
         .json(
             Method::POST,
             "/teams",
+            Some(json!({ "name": name })),
+            Some(&csrf),
+        )
+        .await
+}
+
+async fn rename(browser: &mut Browser, team: &str, name: &str) -> reqwest::Response {
+    let csrf = browser.csrf().await;
+    browser
+        .json(
+            Method::PATCH,
+            &format!("/teams/{team}"),
             Some(json!({ "name": name })),
             Some(&csrf),
         )
@@ -306,6 +319,142 @@ async fn an_unknown_team_is_not_found(pool: PgPool) {
     .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(error_code(response).await, "not_found");
+}
+
+// Renaming (v1.9): an owner gives the team another name; the id stays.
+
+#[sqlx::test]
+async fn an_owner_renames_the_team(pool: PgPool) {
+    let app = start(pool).await;
+    let mut owner = github_browser(&app, 3030, "rebrander").await;
+    let mut mate = github_browser(&app, 3031, "bystander").await;
+    let team = new_team(&mut owner, "Old Guard").await;
+    let mate_id = mate.user_id().await;
+    add(&mut owner, &team, &mate_id).await;
+    let before: Value = owner
+        .get(&format!("/teams/{team}"))
+        .await
+        .json()
+        .await
+        .unwrap();
+
+    let response = rename(&mut owner, &team, "  New Wave ").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let renamed: Value = response.json().await.unwrap();
+    assert_eq!(renamed["name"], "New Wave");
+    // Nothing but the name changed.
+    let mut expected = before.clone();
+    expected["name"] = json!("New Wave");
+    assert_eq!(renamed, expected);
+
+    // Every read shows it, a member's included.
+    let shown: Value = reqwest::get(format!("{}/teams/{team}", app.base))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(shown, renamed);
+    let mine: Value = mate.get("/teams").await.json().await.unwrap();
+    assert_eq!(mine["teams"][0]["id"], team.as_str());
+    assert_eq!(mine["teams"][0]["name"], "New Wave");
+
+    // The old name is free at once.
+    let mut other = github_browser(&app, 3032, "scavenger").await;
+    let response = create_team(&mut other, "old guard").await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+#[sqlx::test]
+async fn a_new_name_is_checked_and_unique_but_for_the_teams_own(pool: PgPool) {
+    let app = start(pool).await;
+    let mut a = github_browser(&app, 3033, "first").await;
+    let mut b = github_browser(&app, 3034, "second").await;
+    let team = new_team(&mut a, "Monkeys").await;
+    new_team(&mut b, "Gorillas").await;
+
+    for bad in ["ab", "x".repeat(33).as_str(), "<b>hi</b>", " -dash", ""] {
+        let response = rename(&mut a, &team, bad).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{bad}");
+        assert_eq!(error_code(response).await, "invalid_name");
+    }
+    let response = rename(&mut a, &team, "gORILLAS").await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(error_code(response).await, "name_taken");
+    let shown: Value = a.get(&format!("/teams/{team}")).await.json().await.unwrap();
+    assert_eq!(shown["name"], "Monkeys");
+
+    // Its own name is not in its way: the same again, or in another case.
+    let response = rename(&mut a, &team, "Monkeys").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = rename(&mut a, &team, "MONKEYS").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let renamed: Value = response.json().await.unwrap();
+    assert_eq!(renamed["name"], "MONKEYS");
+
+    // A body without the name is malformed.
+    let csrf = a.csrf().await;
+    let response = a
+        .json(
+            Method::PATCH,
+            &format!("/teams/{team}"),
+            Some(json!({ "title": "Apes" })),
+            Some(&csrf),
+        )
+        .await;
+    assert_eq!(error_code(response).await, "bad_request");
+}
+
+#[sqlx::test]
+async fn only_an_owner_renames_and_only_through_the_session(pool: PgPool) {
+    let app = start(pool).await;
+    let mut owner = github_browser(&app, 3035, "holder").await;
+    let mut member = github_browser(&app, 3036, "follower").await;
+    let mut outsider = github_browser(&app, 3037, "passerby").await;
+    let team = new_team(&mut owner, "Fixed Name").await;
+    let member_id = member.user_id().await;
+    add(&mut owner, &team, &member_id).await;
+
+    let response = rename(&mut member, &team, "Mutiny").await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(error_code(response).await, "forbidden");
+    let response = rename(&mut outsider, &team, "Hijacked").await;
+    assert_eq!(error_code(response).await, "forbidden");
+    // Who may rename is judged before the name is.
+    let response = rename(&mut member, &team, "x").await;
+    assert_eq!(error_code(response).await, "forbidden");
+    let missing = rename(
+        &mut owner,
+        "0190f0f0-0000-7000-8000-000000000000",
+        "Nowhere",
+    )
+    .await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_eq!(error_code(missing).await, "not_found");
+
+    // The session and its CSRF token, as every team write.
+    let path = format!("/teams/{team}");
+    let body = json!({ "name": "No Csrf" });
+    let response = owner
+        .json(Method::PATCH, &path, Some(body.clone()), None)
+        .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(error_code(response).await, "bad_csrf");
+    let token = new_token(&mut owner, "submit").await;
+    let response = bearer_json(&app, Method::PATCH, &path, &token, Some(body.clone())).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(error_code(response).await, "session_required");
+    let anonymous = reqwest::Client::new()
+        .patch(format!("{}{path}", app.base))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(error_code(anonymous).await, "unauthenticated");
+
+    let shown: Value = owner.get(&path).await.json().await.unwrap();
+    assert_eq!(shown["name"], "Fixed Name");
 }
 
 // The one-team rule (v1.5): an account is in at most one team.

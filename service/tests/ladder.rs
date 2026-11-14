@@ -540,3 +540,56 @@ async fn the_portal_shows_a_teams_standing_and_recent_games(pool: PgPool) {
     );
     assert!(html.contains("href=\"/ladder\""));
 }
+
+// Names are read where a team is shown, never copied into a rating or a
+// game: a rename (v1.9) shows on the board and on games played before it.
+#[sqlx::test]
+async fn a_renamed_team_shows_its_new_name_on_the_board_and_its_past_games(pool: PgPool) {
+    let app = start(pool.clone()).await;
+    let season = db_season(&pool, "Now", 30).await;
+    let mut browser = github_browser(&app, 9110, "renamer").await;
+    let mine: Uuid = new_team(&mut browser, "Before").await.parse().unwrap();
+    let my_sub = db_ready_bot(&pool, None, mine, b"mine").await;
+    let theirs = db_team(&pool, "Others").await;
+    let their_sub = db_ready_bot(&pool, None, theirs, b"theirs").await;
+    rate(&pool, season.id, mine, 1612.0, 91.0, (1, 0, 0)).await;
+    rate(&pool, season.id, theirs, 1388.0, 91.0, (0, 0, 1)).await;
+    let me = Side {
+        team: mine,
+        submission: my_sub,
+    };
+    let them = Side {
+        team: theirs,
+        submission: their_sub,
+    };
+    let game = db_match(&pool, season.id, &me, &them, true, 3).await;
+
+    let csrf = browser.csrf().await;
+    let response = browser
+        .json(
+            reqwest::Method::PATCH,
+            &format!("/teams/{mine}"),
+            Some(json!({ "name": "After" })),
+            Some(&csrf),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let team: Value = response.json().await.unwrap();
+    assert_eq!(team["name"], "After");
+    assert_eq!(team["rating"]["rank"], 1, "the rating stays the team's");
+    assert_eq!(team["active"], my_sub.to_string().as_str());
+
+    let board = get_json(&app.base, "/ladder").await;
+    assert_eq!(board["ratings"][0]["team_id"], mine.to_string().as_str());
+    assert_eq!(board["ratings"][0]["name"], "After");
+    let shown = get_json(&app.base, &format!("/matches/{game}")).await;
+    assert_eq!(shown["sides"][0]["team_id"], mine.to_string().as_str());
+    assert_eq!(shown["sides"][0]["name"], "After");
+    let list = get_json(&app.base, &format!("/matches?team={mine}")).await;
+    assert_eq!(list["matches"][0]["sides"][0]["name"], "After");
+    for path in ["/ladder".to_owned(), format!("/matches/{game}")] {
+        let html = get_html(&app.base, &path).await;
+        assert!(html.contains("After"), "{path}");
+        assert!(!html.contains("Before"), "{path}");
+    }
+}
