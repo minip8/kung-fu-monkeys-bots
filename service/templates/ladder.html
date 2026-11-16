@@ -15,27 +15,35 @@
   <div class="page-actions"><a class="button ghost" href="{{ games_url }}">All games</a></div>
 </div>
 {% if seasons.len() > 1 %}
-<p class="seasons">Seasons: {% for s in seasons %}{% if s.selected %}<strong>{{ s.name }}</strong>{% else %}<a href="/ladder?season={{ s.query }}">{{ s.name }}</a>{% endif %}{% endfor %}</p>
+<nav class="tabs" aria-label="Seasons">{% for s in seasons %}<a href="/ladder?season={{ s.query }}"{% if s.selected %} aria-current="page"{% endif %}>{{ s.name }}</a>{% endfor %}</nav>
 {% endif %}
-<section>
-<p class="eyebrow"><span class="n">01</span> / Board</p>
-{% if rows.is_empty() %}<p class="muted">No team has played in this season yet.</p>
-{% else %}
-<div class="scroll"><table>
-  <tr><th class="num">#</th><th>Team</th><th class="num">Rating</th><th class="num">RD</th><th class="num">Games</th><th class="num">W</th><th class="num">D</th><th class="num">L</th><th>Record</th><th>Module</th></tr>
-  {% for r in rows %}
-  <tr{% if r.rank <= 3 %} class="top"{% endif %}><td class="rank num">{{ r.rank }}</td><td class="team"><a href="/matches?team={{ r.team_id }}" title="This team's games">{{ r.name }}</a></td><td class="num"><strong>{{ r.rating }}</strong></td><td class="num muted">± {{ r.rd }}</td><td class="num">{{ r.games }}</td><td class="num">{{ r.wins }}</td><td class="num">{{ r.draws }}</td><td class="num">{{ r.losses }}</td><td><span class="record" title="{{ r.wins }} won, {{ r.draws }} drawn, {{ r.losses }} lost"><i class="w" style="flex-grow:{{ r.wins }}"></i><i class="d" style="flex-grow:{{ r.draws }}"></i><i class="l" style="flex-grow:{{ r.losses }}"></i></span></td><td>{% if !r.hash.is_empty() %}<code title="SHA-256 of the active module">{{ r.hash }}</code>{% endif %}</td></tr>
-  {% endfor %}
-</table></div>
-{% endif %}
-<p class="pages">{% if let Some(url) = prev %}<a href="{{ url }}">previous</a>{% endif %}{% if let Some(url) = next %}<a href="{{ url }}">next</a>{% endif %}</p>
-</section>
-{% if !games.is_empty() %}
-<section>
-  <p class="eyebrow"><span class="n">02</span> / Games</p>
-  <div class="head-row"><h2>Latest games</h2><a href="{{ games_url }}">All games</a></div>
-  {% for g in games %}{% include "game_line.html" %}{% endfor %}
-</section>
-{% endif %}
-<p class="muted">Teams are paired every round with up to a few neighbours by rating, each pair playing one game on an arena and sides drawn at random; a draw or a game the tick cap ended counts half. How a game is played and scored is in the <a href="/docs/contest">contest guide</a>.</p>
+<div class="panels">
+  <section class="panel span-8 wide" aria-labelledby="board-h">
+    <p class="eyebrow"><span class="n">01</span> / Board{% if page > 1 %} · page {{ page }}{% endif %}</p>
+    <h2 id="board-h">Standings</h2>
+    {% if rows.is_empty() %}<p class="muted">No team has played in this season yet.</p>
+    {% else %}
+    <div class="scroll"><table>
+      <thead><tr><th class="num" scope="col">#</th><th scope="col">Team</th><th class="num" scope="col">Rating</th><th class="num" scope="col">RD</th><th class="num" scope="col">Games</th><th class="num" scope="col"><abbr title="Won">W</abbr></th><th class="num" scope="col"><abbr title="Drawn">D</abbr></th><th class="num" scope="col"><abbr title="Lost">L</abbr></th><th class="opt" scope="col">Record</th><th class="opt" scope="col">Module</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+      <tr class="{% if r.rank <= 3 %}top{% endif %}{% if r.mine %} me{% endif %}"><td class="rank num"><b>{{ r.rank }}</b></td><td class="team"><a href="/matches?team={{ r.team_id }}" title="This team's games">{{ r.name }}</a>{% if r.mine %}<span class="you" title="Your team">you</span>{% endif %}</td><td class="num"><strong>{{ r.rating }}</strong></td><td class="num muted">± {{ r.rd }}</td><td class="num">{{ r.games }}</td><td class="num">{{ r.wins }}</td><td class="num">{{ r.draws }}</td><td class="num">{{ r.losses }}</td><td class="opt"><span class="record" title="{{ r.wins }} won, {{ r.draws }} drawn, {{ r.losses }} lost"><i class="w" style="flex-grow:{{ r.wins }}"></i><i class="d" style="flex-grow:{{ r.draws }}"></i><i class="l" style="flex-grow:{{ r.losses }}"></i></span></td><td class="opt hash">{% if !r.hash.is_empty() %}<span title="SHA-256 of the active module">{{ r.hash }}</span>{% endif %}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% endif %}
+    {% if prev.is_some() || next.is_some() %}
+    <nav class="pager" aria-label="Board pages"><span>Page {{ page }}</span>{% if let Some(url) = prev %}<a class="button quiet" rel="prev" href="{{ url }}">← Previous</a>{% endif %}{% if let Some(url) = next %}<a class="button quiet" rel="next" href="{{ url }}">Next →</a>{% endif %}</nav>
+    {% endif %}
+    <p class="muted small fine">Teams are paired every round with up to a few neighbours by rating, each pair playing one game on an arena and sides drawn at random; a draw or a game the tick cap ended counts half. How a game is played and scored is in the <a href="/docs/contest">contest guide</a>.</p>
+  </section>
+  <section class="panel span-4 wide" aria-labelledby="games-h">
+    <p class="eyebrow"><span class="n">02</span> / Games</p>
+    <div class="head-row"><h2 id="games-h">Latest games</h2><a href="{{ games_url }}">All ↗</a></div>
+    {% if games.is_empty() %}<p class="muted">No game has been played in this season yet.</p>
+    {% else %}
+    <div class="games stacked">{% for g in games %}{% include "game_line.html" %}{% endfor %}</div>
+    {% endif %}
+  </section>
+</div>
 {% endblock %}

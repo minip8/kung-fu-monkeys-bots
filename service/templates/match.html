@@ -4,43 +4,67 @@
 {% block content %}
 <div class="page-head">
   <div>
-    <p class="eyebrow">Compete · ranked game</p>
+    <p class="eyebrow">Compete · ranked game{% if !season.is_empty() %} · season {{ season }}{% endif %}{% if !round.is_empty() %} · round {{ round }}{% endif %}</p>
     <h1>{{ title }}</h1>
     <p class="sub">{% if !season.is_empty() %}Season {{ season }}, {% endif %}{% if !round.is_empty() %}round {{ round }}, {% endif %}{% if game > 1 %}game {{ game }} of its pair, {% endif %}{% if !arena.is_empty() %}on <code>{{ arena }}</code>, {% endif %}played {{ when }} with engine release <code>{{ engine_tag }}</code>.</p>
   </div>
-  {% if let Some(viewer) = viewer_url %}<div class="page-actions"><a class="button ghost" href="{{ viewer }}">Watch the replay <svg class="i" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14 14 6M7.5 6H14v6.5"/></svg></a></div>{% endif %}
+  <div class="page-actions"><a class="button ghost" href="/matches">All games</a></div>
 </div>
-<div class="score">
-  {% for s in sides %}
-  {% if loop.index0 == 1 %}<div class="pts">{{ score_a }}<span>:</span>{{ score_b }}</div>{% endif %}
-  <div class="side{% if s.won %} won{% endif %}"><b>{{ s.team_name }}</b><small>side {{ s.label }} · team {{ s.team }}</small></div>
-  {% endfor %}
-  <p>{{ outcome }} after {{ ticks }} ticks{% if !arena.is_empty() %} on {{ arena }}{% endif %}.</p>
-</div>
-<section>
-  <h2>Sides</h2>
-  <div class="scroll"><table>
-    <tr><th>Side</th><th>Team</th><th class="num">Score</th><th class="num">Kills</th><th class="num">Deaths</th><th class="num">Rating</th><th>Faults</th></tr>
+<div class="match-top{% if !map.is_empty() %} has-map{% endif %}">
+  <div class="score">
+    <p class="eyebrow">Final{% if capped %} · tick cap{% endif %}</p>
     {% for s in sides %}
-    <tr><td>{{ s.label }}</td><td class="team">{% if s.won %}<strong>{{ s.name }}</strong>{% else %}{{ s.name }}{% endif %}</td><td class="num">{{ s.score }}</td><td class="num">{{ s.kills }}</td><td class="num">{{ s.deaths }}</td><td class="num">{{ s.change }}</td>
-      <td>{% if s.faults.is_empty() %}<span class="muted">none</span>{% else %}{% for f in s.faults %}<span class="bad">{{ f }}</span><br>{% endfor %}{% endif %}</td></tr>
+    {% if loop.index0 == 1 %}<div class="pts"><b{% if sides[0].won %} class="won"{% endif %}>{{ score_a }}</b><span>:</span><b{% if s.won %} class="won"{% endif %}>{{ score_b }}</b></div>{% endif %}
+    <div class="side{% if s.won %} won{% endif %}"><b>{{ s.team_name }}</b><small><i class="sw{{ s.team }}"></i>side {{ s.label }} · team {{ s.team }}{% if s.mine %} · you{% endif %}</small><span class="delta">{{ s.change }}</span></div>
     {% endfor %}
-  </table></div>
-  <p class="muted small">{{ ending }}. The score is the side's banked bananas less the ones stolen from its home (the <a href="/docs/contest">contest guide</a>). A fault in a ranked game (a trap, an over-budget tick, a bad return, a dead module) is recorded and counted on the submission; the engine played "repeat last input" for those ticks.</p>
-</section>
-<section>
-  <h2>Replay</h2>
-  {% if let Some(url) = replay_url %}
-  <p>{% if let Some(viewer) = viewer_url %}<a class="button" href="{{ viewer }}">Watch it in the {{ engine_tag }} client</a> {% endif %}<a class="button quiet" href="{{ url }}">Download the replay (.kfmr)</a></p>
-  <p class="muted small">The links are valid for an hour; the replay plays in engine releases after v0.5.1, whose page carries the replay viewer.</p>
-  <p class="muted small">Re-run it bit for bit with the {{ engine_tag }} release's kfm_arena: {% if !arena.is_empty() %}arena {{ arena }}, {% endif %}seed {{ seed }}, {{ ticks }} ticks, each side on the team index shown above, content {{ content_hash }}, build {{ build_hash }}.</p>
-  {% else %}<p class="muted">No replay is stored.</p>{% endif %}
-</section>
-<section>
-  <details>
-    <summary>Result: the match object kfm_arena printed</summary>
-    <p class="muted small">Its keys are the engine's docs/arena-result.md.</p>
-    <pre class="raw">{{ result }}</pre>
-  </details>
-</section>
+    <p class="result">{{ outcome }} after {{ ticks }} ticks{% if !arena.is_empty() %} on {{ arena }}{% endif %}.</p>
+    <div class="cta">
+      {% if let Some(viewer) = viewer_url %}<a class="button" href="{{ viewer }}">Watch the replay <svg class="i" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14 14 6M7.5 6H14v6.5"/></svg></a>{% endif %}
+      {% if let Some(url) = replay_url %}<a class="button quiet" href="{{ url }}">Download the replay (.kfmr)</a>{% else %}<span>No replay is stored</span>{% endif %}
+    </div>
+  </div>
+  {% if !map.is_empty() %}
+  <figure class="arena">
+    {% if map == "grove" %}{% include "maps/grove.svg" %}{% else if map == "orchards" %}{% include "maps/orchards.svg" %}{% else if map == "gorge" %}{% include "maps/gorge.svg" %}{% else if map == "burrows" %}{% include "maps/burrows.svg" %}{% endif %}
+    <figcaption><b>{{ map }}</b> · {{ map_size }} · team 0's home in the west, team 1's in the east. <a href="/docs/contest#arenas">The arenas</a></figcaption>
+  </figure>
+  {% endif %}
+</div>
+<div class="panels">
+  <section class="panel span-8 wide" aria-labelledby="sides-h">
+    <p class="eyebrow"><span class="n">01</span> / Result</p>
+    <h2 id="sides-h">Sides</h2>
+    <div class="scroll"><table>
+      <thead><tr><th scope="col">Side</th><th scope="col">Team</th><th class="num" scope="col">Score</th><th class="num opt" scope="col">Kills</th><th class="num opt" scope="col">Deaths</th><th class="num" scope="col">Rating</th><th scope="col">Faults</th></tr></thead>
+      <tbody>
+      {% for s in sides %}
+      <tr{% if s.mine %} class="me"{% endif %}><td class="rank">{{ s.label }}<small> · team {{ s.team }}</small></td><td class="team"><a href="/matches?team={{ s.team_id }}" title="This team's games">{% if s.won %}<strong>{{ s.team_name }}</strong>{% else %}{{ s.team_name }}{% endif %}</a>{% if s.mine %}<span class="you" title="Your team">you</span>{% endif %}</td><td class="num"><strong>{{ s.score }}</strong></td><td class="num opt">{{ s.kills }}</td><td class="num opt">{{ s.deaths }}</td><td class="num">{{ s.change }}</td>
+        <td>{% if s.faults.is_empty() %}<span class="muted">none</span>{% else %}{% for f in s.faults %}<span class="bad">{{ f }}</span><br>{% endfor %}{% endif %}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    <p class="muted small fine">{{ ending }}. The score is the side's banked bananas less the ones stolen from its home (the <a href="/docs/contest">contest guide</a>). A fault in a ranked game (a trap, an over-budget tick, a bad return, a dead module) is recorded and counted on the submission; the engine played "repeat last input" for those ticks.</p>
+  </section>
+  <section class="panel span-4 wide" aria-labelledby="rerun-h">
+    <p class="eyebrow"><span class="n">02</span> / Reproduce</p>
+    <h2 id="rerun-h">Re-run it</h2>
+    <dl class="kv">
+      <dt>Engine</dt><dd>{{ engine_tag }}</dd>
+      {% if !arena.is_empty() %}<dt>Arena</dt><dd>{{ arena }}</dd>{% endif %}
+      <dt>Seed</dt><dd>{{ seed }}</dd>
+      <dt>Ticks</dt><dd>{{ ticks }}</dd>
+      <dt>Content</dt><dd>{{ content_hash }}</dd>
+      {% if !build_hash.is_empty() %}<dt>Build</dt><dd>{{ build_hash }}</dd>{% endif %}
+    </dl>
+    <p class="muted small">Re-run it bit for bit with the {{ engine_tag }} release's kfm_arena: {% if !arena.is_empty() %}arena {{ arena }}, {% endif %}seed {{ seed }}, {{ ticks }} ticks, each side on the team index shown above.</p>
+    {% if replay_url.is_some() %}<p class="muted small">The replay links are valid for an hour; the replay plays in engine releases after v0.5.1, whose page carries the replay viewer.</p>{% endif %}
+  </section>
+  <section class="panel" aria-label="The raw result">
+    <details>
+      <summary>Result: the match object kfm_arena printed</summary>
+      <p class="muted small">Its keys are the engine's docs/arena-result.md.</p>
+      <pre class="raw">{{ result }}</pre>
+    </details>
+  </section>
+</div>
 {% endblock %}

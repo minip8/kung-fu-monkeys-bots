@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Kung Fu Monkeys ladder: privacy{% endblock %}
-{% block page %}pg-narrow{% endblock %}
+{% block page %}pg-privacy{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
@@ -10,18 +10,22 @@
   </div>
 </div>
 
+<div class="split">
 <section>
-<h2>Who runs it</h2>
+<div><p class="eyebrow"><span class="n">01</span></p><h2>Who runs it</h2></div>
+<div>
 <p>The ladder is run by its operator, the maintainer of the Kung Fu Monkeys bots project, and
 can be reached at
 {% match contact_href %}{% when Some with (href) %}<a href="{{ href }}">{{ contact }}</a>{% when None %}{{ contact }}{% endmatch %}.
 The service's source code is public at
 <a href="https://github.com/minip8/kung-fu-monkeys-bots">github.com/minip8/kung-fu-monkeys-bots</a>,
 so everything below can be checked against what it does.</p>
+</div>
 </section>
 
 <section>
-<h2>What is stored and why</h2>
+<div><p class="eyebrow"><span class="n">02</span></p><h2>What is stored and why</h2></div>
+<div>
 <ul>
 <li><strong>Your sign-in identity.</strong> When you sign in with GitHub or Google, the service
 stores the provider's account id for you (GitHub's numeric user id, Google's subject id) and
@@ -45,35 +49,45 @@ file.{% else %}A game's replay file is deleted {{ replay_hours }} hours after th
 <li><strong>Backups.</strong> A nightly copy of the database is kept in the object store for a
 limited time (30 days in the standard deployment).</li>
 </ul>
+</div>
 </section>
 
 <section>
-<h2>What is not</h2>
+<div><p class="eyebrow"><span class="n">03</span></p><h2>What is not</h2></div>
+<div>
 <p>No password (sign-in goes through GitHub or Google), no payment data, no analytics or
 tracking scripts, no advertising. The portal sets only its own sign-in cookies.</p>
+</div>
 </section>
 
 <section>
-<h2>IP addresses</h2>
+<div><p class="eyebrow"><span class="n">04</span></p><h2>IP addresses</h2></div>
+<div>
 <p>Your IP address is seen by the web server in front of the service, which may keep it in its
 logs, and by the service's rate limiter, which counts requests per address in memory only.
 The service does not store IP addresses in its database.</p>
+</div>
 </section>
 
 <section>
-<h2>Other services involved</h2>
+<div><p class="eyebrow"><span class="n">05</span></p><h2>Other services involved</h2></div>
+<div>
 <ul>
 <li>GitHub and Google, for signing in, when you choose them.</li>
 <li>Cloudflare R2, which stores the files (sources, modules, logs, replays, backups).</li>
 <li>Sentry, for error reports, when enabled.</li>
 <li>Google Cloud, which hosts the service and its database, in Australia.</li>
 </ul>
+</div>
 </section>
 
 <section>
-<h2>Deleting your data</h2>
+<div><p class="eyebrow"><span class="n">06</span></p><h2>Deleting your data</h2></div>
+<div>
 <p>Unlinking a sign-in provider and deleting an account are not self-service yet. To have your
 account, identities, tokens or teams deleted, ask the operator at the contact above. The
 results of ranked games already played stay part of the ladder's record.</p>
+</div>
 </section>
+</div>
 {% endblock %}

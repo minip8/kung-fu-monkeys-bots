@@ -1,0 +1,10 @@
+{# The body of a Results panel (portal/home.rs LiveView): the latest games
+   across the ladder through game_line.html, the viewer's sides marked. #}
+<div class="head-row"><h2>Latest results</h2><a href="/matches">All games ↗</a></div>
+{% if live.results.is_empty() %}<p class="muted">No game has been played yet.</p>
+{% else %}
+<div class="games stacked">
+{% for g in live.results %}{% include "game_line.html" %}
+{% endfor %}
+</div>
+{% endif %}

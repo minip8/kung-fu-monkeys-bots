@@ -7,6 +7,7 @@ mod common;
 use common::{github_browser, location, start, Browser, FakeUser, Provider};
 use reqwest::StatusCode;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 /// What a browser's navigation sends (`GET /tokens` answers it the page).
 const HTML: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
@@ -69,6 +70,19 @@ async fn signed_out_shows_both_providers(pool: PgPool) {
     assert!(html.contains("<svg class=\"map\""), "the grove drawing");
     assert!(html.contains("No team has played in this season yet."));
     assert!(html.contains("No game has been played yet."));
+    // The live panels, empty and saying so, and the four arenas.
+    assert!(html.contains("<h2>Now playing</h2>"));
+    assert!(
+        html.contains("No game is being played right now: no season is running."),
+        "{html}"
+    );
+    assert!(html.contains("Games are scheduled while a season runs."));
+    assert_eq!(
+        html.matches("<svg class=\"map\"").count(),
+        5,
+        "the hero's and the four cards"
+    );
+    assert!(html.contains("href=\"/docs/contest#arenas\""));
 }
 
 #[sqlx::test]
@@ -710,16 +724,220 @@ async fn a_bearer_asking_for_html_still_gets_the_token_list(pool: PgPool) {
 async fn the_home_is_a_dashboard_of_the_account(pool: PgPool) {
     let app = start(pool).await;
     let mut browser = github_browser(&app, 4052, "dash").await;
+    // No team: a prompt to create one, and no account figures.
     let html = page(&mut browser, "/").await;
     assert!(html.contains("Welcome back, dash"), "{html}");
     assert!(html.contains("No team yet"));
-    assert!(html.contains("<li class=\"chip\">GitHub</li>"), "{html}");
+    assert!(html.contains(">Create a team</a>"), "{html}");
+    assert!(!html.contains("class=\"spark\""));
     assert!(!html.contains("Bank the bananas."), "not the landing page");
+    // The live panels, the about strip and the arenas are there all the same.
+    assert!(html.contains("<h2>Now playing</h2>") && html.contains("<h2>Latest results</h2>"));
+    assert!(html.contains("href=\"/docs/contest#arenas\""));
+    assert_eq!(
+        html.matches("<svg class=\"map\"").count(),
+        4,
+        "the four arenas"
+    );
+    // A team with no game: not rated, no active bot, the way to submit one.
     common::new_team(&mut browser, "Dash Team").await;
     let html = page(&mut browser, "/").await;
     assert!(html.contains("<h2>Dash Team</h2>"), "{html}");
     assert!(html.contains("Not rated in the current season yet"));
-    assert!(html.contains("href=\"/submissions\""));
+    assert!(
+        html.contains("<li class=\"chip bad\">No active bot</li>"),
+        "{html}"
+    );
+    assert!(html.contains("href=\"/submissions\">Submit a bot</a>"));
+    assert!(html.contains("href=\"/team\">Team</a>"));
+    assert!(!html.contains("class=\"spark\""));
+    assert!(html.contains("No ranked game yet"), "the team's games");
+}
+
+/// A recorded game between `a` and `b` in `season`, `minutes` ago, side A
+/// winning with rating changes `delta_a` and `-delta_a`.
+async fn played(
+    pool: &PgPool,
+    season: Uuid,
+    (a, sa): (Uuid, Uuid),
+    (b, sb): (Uuid, Uuid),
+    delta_a: f64,
+    minutes: i32,
+) {
+    sqlx::query(
+        "INSERT INTO matches (id, season_id, seed, engine_tag, content_hash, team_a, submission_a, \
+           team_b, submission_b, winner_team, result, round, score_a, score_b, delta_a, delta_b, created_at) \
+         VALUES ($1, $2, 1, 'v0.11.0', 'a99dfcf8', $3, $4, $5, $6, $3, '{\"arena\": \"grove\"}', 1, \
+           40, 12, $7, -$7, now() - make_interval(mins => $8))",
+    )
+    .bind(Uuid::now_v7())
+    .bind(season)
+    .bind(a)
+    .bind(sa)
+    .bind(b)
+    .bind(sb)
+    .bind(delta_a)
+    .bind(minutes)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[sqlx::test]
+async fn the_home_draws_the_teams_rating_this_season(pool: PgPool) {
+    let app = start(pool.clone()).await;
+    let season = common::db_season(&pool, "Spark", 30).await;
+    let mut browser = github_browser(&app, 4054, "sparky").await;
+    let mine: Uuid = common::new_team(&mut browser, "Spark Team")
+        .await
+        .parse()
+        .unwrap();
+    let mine_bot = common::db_ready_bot(&pool, None, mine, b"mine").await;
+    let other = common::db_team(&pool, "Other Team").await;
+    let other_bot = common::db_ready_bot(&pool, None, other, b"other").await;
+    // Three games: +20, -8, +12 from 1500, so 1524 now; the other team the mirror.
+    for (i, delta) in [20.0, -8.0, 12.0].into_iter().enumerate() {
+        played(
+            &pool,
+            season.id,
+            (mine, mine_bot),
+            (other, other_bot),
+            delta,
+            30 - i as i32 * 10,
+        )
+        .await;
+    }
+    for (team, mu, wdl) in [(mine, 24.0, (2, 0, 1)), (other, -24.0, (1, 0, 2))] {
+        sqlx::query(
+            "INSERT INTO ratings (season_id, team_id, mu, phi, sigma, games, wins, draws, losses) \
+             VALUES ($1, $2, $3, 0.5, 0.06, 3, $4, $5, $6)",
+        )
+        .bind(season.id)
+        .bind(team)
+        .bind(mu / kfm_ladder::glicko::SCALE)
+        .bind(wdl.0)
+        .bind(wdl.1)
+        .bind(wdl.2)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let html = page(&mut browser, "/").await;
+    assert!(
+        html.contains("<b>1524<small>± 87</small></b><span>Rating</span>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<b class=\"rank\">#1</b><span>Rank · Spark</span>"),
+        "{html}"
+    );
+    // The sparkline walks back from 1524 through the three changes: four
+    // points across the box, the highest (now) at the top.
+    assert!(
+        html.contains("aria-label=\"Rating over 3 games this season, from 1500 to 1524\""),
+        "{html}"
+    );
+    let points = html
+        .split("<polyline class=\"ln\" points=\"")
+        .nth(1)
+        .unwrap();
+    let points = &points[..points.find('"').unwrap()];
+    assert_eq!(points.split(' ').count(), 4, "{points}");
+    assert!(
+        points.starts_with("0.0,52.0 ") && points.ends_with(" 200.0,4.0"),
+        "{points}"
+    );
+    assert!(
+        html.contains("<b class=\"good\">+24.0</b> over the last 3"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<b class=\"good\">2</b> won · <b>0</b> drawn · <b class=\"bad\">1</b> lost")
+    );
+    assert!(
+        html.contains("<li class=\"chip good\">Active bot · "),
+        "{html}"
+    );
+    // The team's games, and the ladder's latest results with the team's side marked.
+    assert!(html.contains("Spark Team's latest games"));
+    assert_eq!(
+        html.matches("<td class=\"team\">Other Team</td>").count(),
+        3,
+        "{html}"
+    );
+    assert!(html.contains("<h2>Latest results</h2>"));
+    assert!(html.matches("href=\"/matches/").count() >= 6, "{html}");
+}
+
+#[sqlx::test]
+async fn now_playing_lists_the_match_jobs_by_team(pool: PgPool) {
+    let app = start(pool.clone()).await;
+    let season = common::db_season(&pool, "Live", 30).await;
+    // Signed out, with nothing queued: an honest empty state, no round known yet.
+    let mut anonymous = Browser::new(&app);
+    let html = page(&mut anonymous, "/").await;
+    assert!(
+        html.contains("No game is being played right now."),
+        "{html}"
+    );
+    assert!(!html.contains("Next round"), "{html}");
+    assert!(html.contains("as of "));
+
+    let mut browser = github_browser(&app, 4055, "live").await;
+    let mine: Uuid = common::new_team(&mut browser, "Live Team")
+        .await
+        .parse()
+        .unwrap();
+    let teams = [
+        mine,
+        common::db_team(&pool, "Second Team").await,
+        common::db_team(&pool, "Third Team").await,
+    ];
+    for (i, (a, b, state)) in [(0, 1, "running"), (1, 2, "queued")]
+        .into_iter()
+        .enumerate()
+    {
+        let payload = serde_json::json!({"season": season.id, "round": 4, "mode": "contest",
+            "team_a": teams[a], "submission_a": Uuid::now_v7(), "team_b": teams[b],
+            "submission_b": Uuid::now_v7(), "seed": i});
+        sqlx::query("INSERT INTO jobs (id, kind, payload, state) VALUES ($1, 'match', $2, $3)")
+            .bind(Uuid::now_v7())
+            .bind(payload)
+            .bind(state)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    // A finished job and a job of another kind are not listed.
+    sqlx::query("INSERT INTO jobs (id, kind, payload, state) VALUES ($1, 'match', '{}', 'done'), ($2, 'build', '{}', 'queued')")
+        .bind(Uuid::now_v7())
+        .bind(Uuid::now_v7())
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO rounds (season_id, number, teams, pairs, created_at) VALUES ($1, 4, 3, 2, now() - interval '2 minutes')")
+        .bind(season.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let html = page(&mut browser, "/").await;
+    assert_eq!(html.matches("<li class=\"np-line").count(), 2, "{html}");
+    assert!(html.contains("<li class=\"np-line mine\">"), "{html}");
+    assert!(
+        html.contains("<span class=\"a me\">Live Team</span>"),
+        "{html}"
+    );
+    assert!(html.contains("<span class=\"b\">Second Team</span>"));
+    assert!(html.contains("<span class=\"a\">Second Team</span>"));
+    assert!(html.contains("<span class=\"chip live\">Live</span>"));
+    assert!(html.contains("<span class=\"chip\">Queued</span>"));
+    assert!(html.contains(" · round 4"));
+    // The test app's rounds are 5 minutes apart; the last was 2 ago.
+    assert!(html.contains("<b>Next round in about 3 min</b>"), "{html}");
+    // The running game is listed first, and a visitor sees the same.
+    assert!(html.find("chip live").unwrap() < html.find("chip\">Queued").unwrap());
+    let html = page(&mut anonymous, "/").await;
+    assert_eq!(html.matches("<li class=\"np-line\">").count(), 2, "{html}");
 }
 
 #[sqlx::test]

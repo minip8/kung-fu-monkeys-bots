@@ -10,32 +10,42 @@
   </div>
 </div>
 
-{% if let Some(message) = error %}<section class="error" role="alert">{{ message }}</section>{% endif %}
+{% if let Some(message) = error %}<p class="error" role="alert">{{ message }}</p>{% endif %}
 
+{% if !sign_in.is_empty() || confirm.is_some() %}
+<div class="panels">
 {% if !sign_in.is_empty() %}
-<section class="signin">
-  <h2>Sign in first</h2>
-  <p>Sign in to the ladder, then confirm the login on the next page.</p>
-  {% for p in sign_in %}<a class="button" href="{{ p.href }}">Sign in with {{ p.label }}</a>{% endfor %}
-</section>
+  <section class="panel signin" aria-labelledby="signin-h">
+    <p class="eyebrow"><span class="n">01</span> / Sign in</p>
+    <h2 id="signin-h">Sign in first</h2>
+    <p>Sign in to the ladder, then confirm the login on the next page.</p>
+    {% for p in sign_in %}<a class="button" href="{{ p.href }}">Sign in with {{ p.label }}</a>{% endfor %}
+  </section>
 {% endif %}
-
 {% if let Some(c) = confirm %}
-<section>
-  <h2>Authorize the kfm CLI on this computer?</h2>
-  <p>Signed in as <strong>{{ c.user }}</strong>. It creates a <code>submit</code> token named
-    <strong>'{{ c.token_name }}'</strong> and hands it to the <code>kfm</code> listening on this computer
-    (port {{ c.port }}), which stores it in its config file. The token can upload and activate your
-    teams' bots; revoke it on the <a href="/tokens">API tokens</a> page at any time, or with <code>kfm logout</code>.</p>
-  <p class="muted">Only continue if you ran <code>kfm login</code> yourself just now.</p>
-  <form class="row" method="post" action="/auth/cli">
-    <input type="hidden" name="csrf" value="{{ c.csrf }}">
-    <input type="hidden" name="port" value="{{ c.port }}">
-    <input type="hidden" name="state" value="{{ c.state }}">
-    <input type="hidden" name="host" value="{{ c.host }}">
-    <button type="submit" name="decision" value="allow">Authorize</button>
-    <button class="quiet" type="submit" name="decision" value="deny">Cancel</button>
-  </form>
-</section>
+  <section class="panel" aria-labelledby="confirm-h">
+    <p class="eyebrow"><span class="n">02</span> / Confirm</p>
+    <h2 id="confirm-h">Authorize the kfm CLI on this computer?</h2>
+    <dl class="kv">
+      <dt>Token</dt><dd>{{ c.token_name }}</dd>
+      <dt>Scope</dt><dd>submit</dd>
+      <dt>Handed to</dt><dd>127.0.0.1:{{ c.port }}</dd>
+    </dl>
+    <p>Signed in as <strong>{{ c.user }}</strong>. It creates a <code>submit</code> token named
+      <strong>'{{ c.token_name }}'</strong> and hands it to the <code>kfm</code> listening on this computer
+      (port {{ c.port }}), which stores it in its config file. The token can upload and activate your
+      teams' bots; revoke it on the <a href="/tokens">API tokens</a> page at any time, or with <code>kfm logout</code>.</p>
+    <p class="callout">Only continue if you ran <code>kfm login</code> yourself just now.</p>
+    <form class="row" method="post" action="/auth/cli">
+      <input type="hidden" name="csrf" value="{{ c.csrf }}">
+      <input type="hidden" name="port" value="{{ c.port }}">
+      <input type="hidden" name="state" value="{{ c.state }}">
+      <input type="hidden" name="host" value="{{ c.host }}">
+      <button type="submit" name="decision" value="allow">Authorize</button>
+      <button class="quiet" type="submit" name="decision" value="deny">Cancel</button>
+    </form>
+  </section>
+{% endif %}
+</div>
 {% endif %}
 {% endblock %}

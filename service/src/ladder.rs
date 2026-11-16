@@ -576,7 +576,8 @@ pub async fn match_route(
         let shell =
             crate::portal::Shell::load(&state.db, session.as_ref(), crate::portal::nav::GAMES)
                 .await?;
-        return crate::portal::match_page(shell, &detail);
+        let mine = crate::portal::viewer_teams(&state.db, session.as_ref()).await?;
+        return crate::portal::match_page(shell, &mine, &detail);
     }
     Ok(Json(detail).into_response())
 }

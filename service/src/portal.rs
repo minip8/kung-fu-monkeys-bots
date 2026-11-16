@@ -33,11 +33,6 @@ use crate::{manifest, seasons, submissions, teams, users, AppState};
 
 /// The games a team's page lists.
 const RECENT_MATCHES: i64 = 10;
-/// The games of the team the signed-in home shows.
-const HOME_MATCHES: usize = 5;
-/// The teams and the games the landing page shows.
-const LANDING_TEAMS: i64 = 5;
-const LANDING_GAMES: i64 = 5;
 /// The games under a season's board.
 const LADDER_GAMES: i64 = 8;
 
@@ -55,7 +50,7 @@ pub const ACCOUNT_PAGE: &str = "/account";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/", get(index))
+        .route("/", get(home::index))
         .route(TEAM_PAGE, get(team_page))
         .route(SUBMISSIONS_PAGE, get(submissions_page))
         .route(ACCOUNT_PAGE, get(account_page))
@@ -260,6 +255,24 @@ struct GameLine {
     ticks: i32,
     /// The tick cap ended it (a draw).
     capped: bool,
+    a_team: Uuid,
+    b_team: Uuid,
+    /// Whether the side is a team of the viewer's ([`GameLine::mark`]).
+    a_mine: bool,
+    b_mine: bool,
+}
+
+impl GameLine {
+    /// Marks the sides that are one of `mine` (the viewer's teams).
+    fn mark(mut self, mine: &[Uuid]) -> GameLine {
+        self.a_mine = mine.contains(&self.a_team);
+        self.b_mine = mine.contains(&self.b_team);
+        self
+    }
+
+    fn mine(&self) -> bool {
+        self.a_mine || self.b_mine
+    }
 }
 
 fn game_line(m: &MatchSummary) -> GameLine {
@@ -276,6 +289,10 @@ fn game_line(m: &MatchSummary) -> GameLine {
         b_won: m.winner == Some(b.team_id),
         ticks: m.ticks,
         capped: m.end == "cap",
+        a_team: a.team_id,
+        b_team: b.team_id,
+        a_mine: false,
+        b_mine: false,
     }
 }
 
@@ -498,114 +515,9 @@ fn messages(
 }
 
 // ---------------------------------------------------------------------------
-// `/`: the landing page or the home.
+// `/`: the landing page or the home, in `portal/home.rs`.
 
-/// The signed-in home's summary of the account.
-struct HomeView {
-    name: String,
-    id: Uuid,
-    /// The linked providers' labels.
-    linked: Vec<&'static str>,
-    tokens: usize,
-    /// The first of the caller's teams (an operator may have several).
-    team: Option<TeamView>,
-    /// How many teams the caller is in.
-    team_count: usize,
-    can_create_team: bool,
-}
-
-#[derive(Template)]
-#[template(path = "index.html")]
-struct IndexPage {
-    shell: Shell,
-    error: Option<String>,
-    notice: Option<String>,
-    /// Signed in: the account at a glance.
-    home: Option<HomeView>,
-    /// Signed out: the landing page.
-    landing: Option<LandingView>,
-    engine_tag: String,
-}
-
-/// The landing page's live parts: the season, the top of its board and its
-/// latest games.
-struct LandingView {
-    season: Option<SeasonLine>,
-    top: Vec<StandingView>,
-    games: Vec<GameLine>,
-    /// The scheduler's round interval in whole minutes (0 under a minute).
-    round_minutes: u64,
-}
-
-async fn home_view(state: &AppState, session: &Session) -> AppResult<HomeView> {
-    let db = &state.db;
-    let user = users::get_user(db, session.user_id).await?;
-    let linked = provider_views(db, user.id)
-        .await?
-        .into_iter()
-        .filter(|p| p.linked)
-        .map(|p| p.label)
-        .collect();
-    let tokens = tokens::list_tokens(db, user.id).await?.len();
-    let mut teams = team_views(db, user.id).await?;
-    let team_count = teams.len();
-    let mut team = (!teams.is_empty()).then(|| teams.swap_remove(0));
-    if let Some(t) = &mut team {
-        t.matches.truncate(HOME_MATCHES);
-    }
-    Ok(HomeView {
-        name: user.display_name,
-        id: user.id,
-        linked,
-        tokens,
-        can_create_team: user.operator || team_count == 0,
-        team,
-        team_count,
-    })
-}
-
-async fn landing_view(state: &AppState) -> AppResult<LandingView> {
-    let db = &state.db;
-    let season = ladder::season_param(db, None).await?;
-    let now = seasons::db_now(db).await?;
-    let (top, games) = match &season {
-        Some(s) => (
-            ladder::standings(db, s.id, 1, LANDING_TEAMS).await?.0,
-            ladder::list_matches(db, None, Some(s.id), 1, LANDING_GAMES)
-                .await?
-                .0,
-        ),
-        None => (Vec::new(), Vec::new()),
-    };
-    Ok(LandingView {
-        season: season.as_ref().map(|s| season_line(s, now)),
-        top: top.into_iter().map(standing_view).collect(),
-        games: games.iter().map(game_line).collect(),
-        round_minutes: state.config.round_seconds / 60,
-    })
-}
-
-/// `GET /`: the landing page when signed out; the home when signed in. Shows
-/// `?error=<code>` (sign-in failures land here) and `?linked=`.
-async fn index(
-    State(state): State<AppState>,
-    MaybeSession(session): MaybeSession,
-    query: Result<Query<MessageQuery>, QueryRejection>,
-) -> AppResult<Response> {
-    let (error, notice) = messages(query);
-    let (home, landing) = match &session {
-        Some(session) => (Some(home_view(&state, session).await?), None),
-        None => (None, Some(landing_view(&state).await?)),
-    };
-    html_page(&IndexPage {
-        shell: Shell::load(&state.db, session.as_ref(), nav::HOME).await?,
-        error,
-        notice,
-        home,
-        landing,
-        engine_tag: state.config.engine_tag.clone(),
-    })
-}
+mod home;
 
 // ---------------------------------------------------------------------------
 // `/team`, `/submissions`, `/tokens`, `/account`.
@@ -1038,9 +950,25 @@ fn season_line(s: &seasons::Season, now: OffsetDateTime) -> SeasonLine {
     }
 }
 
+/// The teams of the signed-in viewer (one, or an operator's several), for
+/// marking their rows on the public pages; none when signed out.
+pub(crate) async fn viewer_teams(db: &PgPool, session: Option<&Session>) -> AppResult<Vec<Uuid>> {
+    let Some(session) = session else {
+        return Ok(Vec::new());
+    };
+    let rows: Vec<(Uuid,)> =
+        sqlx::query_as("SELECT team_id FROM memberships WHERE user_id = $1 ORDER BY joined_at")
+            .bind(session.user_id)
+            .fetch_all(db)
+            .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 struct StandingView {
     rank: i64,
     team_id: Uuid,
+    /// The viewer's team: its row is marked.
+    mine: bool,
     name: String,
     rating: i64,
     rd: i64,
@@ -1051,9 +979,10 @@ struct StandingView {
     hash: String,
 }
 
-fn standing_view(r: Standing) -> StandingView {
+fn standing_view(r: Standing, mine: &[Uuid]) -> StandingView {
     StandingView {
         rank: r.rank,
+        mine: mine.contains(&r.team_id),
         team_id: r.team_id,
         name: r.name,
         rating: r.rating,
@@ -1081,6 +1010,7 @@ struct LadderPage {
     games: Vec<GameLine>,
     /// The season's page of `/matches`.
     games_url: String,
+    page: i64,
     prev: Option<String>,
     next: Option<String>,
     engine_tag: String,
@@ -1101,6 +1031,7 @@ pub async fn ladder_page(
     let season = ladder::season_param(&state.db, query.season.as_deref()).await?;
     let now = seasons::db_now(&state.db).await?;
     let all = seasons::list(&state.db).await?;
+    let mine = viewer_teams(&state.db, session).await?;
     let (rows, more) = match &season {
         Some(s) => ladder::standings(&state.db, s.id, page, ladder::LADDER_PAGE).await?,
         None => (Vec::new(), false),
@@ -1135,12 +1066,13 @@ pub async fn ladder_page(
             })
             .collect(),
         season: season.as_ref().map(|s| season_line(s, now)),
-        rows: rows.into_iter().map(standing_view).collect(),
-        games: games.iter().map(game_line).collect(),
+        rows: rows.into_iter().map(|r| standing_view(r, &mine)).collect(),
+        games: games.iter().map(|g| game_line(g).mark(&mine)).collect(),
         games_url: season.as_ref().map_or_else(
             || "/matches".to_owned(),
             |s| format!("/matches?season={}", encode(&s.name)),
         ),
+        page,
         prev: (page > 1).then(|| link(page - 1)),
         next: more.then(|| link(page + 1)),
         engine_tag: state.config.engine_tag.clone(),
@@ -1152,8 +1084,9 @@ pub async fn ladder_page(
 
 struct SideView {
     label: &'static str,
-    /// The team's name with the mode's team index it played.
-    name: String,
+    team_id: Uuid,
+    /// One of the viewer's teams.
+    mine: bool,
     team_name: String,
     team: i16,
     won: bool,
@@ -1177,6 +1110,12 @@ struct MatchPage {
     engine_tag: String,
     outcome: String,
     ending: &'static str,
+    /// Whether the tick cap ended it.
+    capped: bool,
+    /// The arena's drawing in `templates/maps/` (its name) and its size;
+    /// empty for an arena the site has no drawing of.
+    map: &'static str,
+    map_size: &'static str,
     sides: Vec<SideView>,
     score_a: i32,
     score_b: i32,
@@ -1208,9 +1147,18 @@ fn fault_line(fault: &serde_json::Value) -> String {
     format!("slot {}: {}", n("slot"), parts.join(", "))
 }
 
+/// The arenas drawn in `templates/maps/` (the contest's pool), with their
+/// size in cells: the game page includes the drawing of its arena.
+const MAPS: [(&str, &str); 4] = [
+    ("grove", "24 × 14"),
+    ("orchards", "28 × 16"),
+    ("gorge", "26 × 16"),
+    ("burrows", "20 × 12"),
+];
+
 /// `GET /matches/{m}` for a browser: the game's sides, its replay links and
 /// its raw result.
-pub fn match_page(shell: Shell, detail: &MatchDetail) -> AppResult<Response> {
+pub fn match_page(shell: Shell, mine: &[Uuid], detail: &MatchDetail) -> AppResult<Response> {
     let m = &detail.summary;
     let outcome = match m.winner {
         None => "A draw".to_owned(),
@@ -1223,13 +1171,22 @@ pub fn match_page(shell: Shell, detail: &MatchDetail) -> AppResult<Response> {
             format!("{name} won")
         }
     };
+    let arena = m.arena.clone().unwrap_or_default();
+    let (map, map_size) = MAPS
+        .iter()
+        .find(|(name, _)| *name == arena)
+        .copied()
+        .unwrap_or(("", ""));
     let html = MatchPage {
         shell,
         title: format!("{} v {}", m.sides[0].name, m.sides[1].name),
         season: m.season.clone().unwrap_or_default(),
         round: m.round.map(|r| r.to_string()).unwrap_or_default(),
         game: m.game + 1,
-        arena: m.arena.clone().unwrap_or_default(),
+        arena,
+        map,
+        map_size,
+        capped: m.end == "cap",
         when: when(m.created_at),
         engine_tag: m.engine_tag.clone(),
         outcome,
@@ -1244,7 +1201,8 @@ pub fn match_page(shell: Shell, detail: &MatchDetail) -> AppResult<Response> {
             .zip(["A", "B"])
             .map(|(s, label)| SideView {
                 label,
-                name: format!("{} (team {})", s.name, s.team),
+                team_id: s.team_id,
+                mine: mine.contains(&s.team_id),
                 team_name: s.name.clone(),
                 team: s.team,
                 won: m.winner == Some(s.team_id),
@@ -1284,9 +1242,34 @@ struct MatchesPage {
     season: Option<String>,
     /// Whether a team or a season narrows the list.
     filtered: bool,
+    /// The list without the team filter, and without the season filter.
+    drop_team: String,
+    drop_season: String,
+    /// The viewer's team and its list, unless that is the list shown.
+    mine: Option<(String, String)>,
     games: Vec<GameLine>,
+    page: i64,
     prev: Option<String>,
     next: Option<String>,
+}
+
+/// `/matches` with these filters (and a page past the first).
+fn matches_url(team: Option<Uuid>, season: Option<&str>, page: i64) -> String {
+    let mut query = Vec::new();
+    if page > 1 {
+        query.push(format!("page={page}"));
+    }
+    if let Some(id) = team {
+        query.push(format!("team={id}"));
+    }
+    if let Some(name) = season {
+        query.push(format!("season={}", encode(name)));
+    }
+    if query.is_empty() {
+        "/matches".to_owned()
+    } else {
+        format!("/matches?{}", query.join("&"))
+    }
 }
 
 /// `GET /matches` for a browser: recorded games, newest first, paged, of
@@ -1309,16 +1292,24 @@ pub async fn matches_page(
         Some(id) => teams::team_name(&state.db, id).await?,
         None => None,
     };
+    let season_name = filter.season.as_ref().map(|s| s.name.as_str());
     let link = |p: i64| {
         let mut url = format!("/matches?page={p}");
         if let Some(id) = filter.team {
             url.push_str(&format!("&team={id}"));
         }
-        if let Some(s) = &filter.season {
+        if let Some(name) = season_name {
             url.push_str("&season=");
-            url.push_str(&encode(&s.name));
+            url.push_str(&encode(name));
         }
         url
+    };
+    let viewer = viewer_teams(&state.db, session).await?;
+    let mine = match viewer.first() {
+        Some(&id) if filter.team != Some(id) => teams::team_name(&state.db, id)
+            .await?
+            .map(|name| (name, matches_url(Some(id), season_name, 1))),
+        _ => None,
     };
     let html = MatchesPage {
         shell: Shell::load(&state.db, session, nav::GAMES).await?,
@@ -1328,7 +1319,11 @@ pub async fn matches_page(
         filtered: filter.team.is_some() || filter.season.is_some(),
         team,
         season: filter.season.as_ref().map(|s| s.name.clone()),
-        games: matches.iter().map(game_line).collect(),
+        drop_team: matches_url(None, season_name, 1),
+        drop_season: matches_url(filter.team, None, 1),
+        mine,
+        games: matches.iter().map(|g| game_line(g).mark(&viewer)).collect(),
+        page: filter.page,
         prev: (filter.page > 1).then(|| link(filter.page - 1)),
         next: more.then(|| link(filter.page + 1)),
     }

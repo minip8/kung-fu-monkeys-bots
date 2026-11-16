@@ -1,0 +1,19 @@
+{# The body of a Now playing panel (portal/home.rs LiveView): the match jobs
+   queued or running at page load, then when the next round is due. #}
+<div class="head-row"><h2>Now playing</h2><span class="asof">as of {{ live.as_of }}</span></div>
+{% if live.playing.is_empty() %}
+<p class="np-empty">No game is being played right now{% if !live.season_running %}: no season is running{% endif %}.</p>
+{% else %}
+<ul class="np">
+  {% for p in live.playing %}
+  <li class="np-line{% if p.a_mine || p.b_mine %} mine{% endif %}">
+    <span class="a{% if p.a_mine %} me{% endif %}">{{ p.a }}</span>
+    <span class="vs">vs</span>
+    <span class="b{% if p.b_mine %} me{% endif %}">{{ p.b }}</span>
+    <small>{% if p.running %}<span class="chip live">Live</span> since {{ p.since }}{% else %}<span class="chip">Queued</span> {{ p.since }}{% endif %}{% if let Some(r) = p.round %} · round {{ r }}{% endif %}{% if p.a_mine || p.b_mine %} · <b>your team</b>{% endif %}</small>
+  </li>
+  {% endfor %}
+</ul>
+{% if live.more > 0 %}<p class="muted small np-more">and {{ live.more }} more waiting for a worker.</p>{% endif %}
+{% endif %}
+<p class="np-next">{% if !live.next_round.is_empty() %}<b>Next round {{ live.next_round }}</b>{% if live.season_running %} · rounds every {{ live.every }}{% endif %}{% else if live.season_running %}Rounds every {{ live.every }}{% else %}Games are scheduled while a season runs{% endif %}. A finished game lands in Results with its replay.</p>
