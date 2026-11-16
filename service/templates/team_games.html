@@ -1,0 +1,9 @@
+{% if t.matches.is_empty() %}<p class="muted">No ranked game yet: once a ready submission is active, the scheduler pairs the team in its next round.</p>
+{% else %}
+<div class="scroll"><table>
+  <tr><th>Played</th><th>Opponent</th><th>Result</th><th class="num">Score</th><th class="num">Rating</th><th></th></tr>
+  {% for m in t.matches %}
+  <tr><td class="when">{{ m.when }}</td><td class="team">{{ m.opponent }}</td><td>{{ m.outcome }}{% if m.faulted %} <span class="bad">fault</span>{% endif %}</td><td class="num">{{ m.score }}</td><td class="num">{{ m.change }}</td><td class="act"><a href="/matches/{{ m.id }}">match</a></td></tr>
+  {% endfor %}
+</table></div>
+{% endif %}

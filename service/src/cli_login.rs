@@ -163,6 +163,7 @@ struct ProviderLink {
 #[derive(Template)]
 #[template(path = "cli.html")]
 struct CliPage {
+    shell: portal::Shell,
     error: Option<String>,
     /// Signed out: the sign-in links that come back here.
     sign_in: Vec<ProviderLink>,
@@ -190,10 +191,11 @@ fn render(status: StatusCode, page: CliPage) -> AppResult<Response> {
     Ok(portal::page_response_csp(status, html, CLI_CSP))
 }
 
-fn error_page(message: &str) -> AppResult<Response> {
+fn error_page(shell: portal::Shell, message: &str) -> AppResult<Response> {
     render(
         StatusCode::BAD_REQUEST,
         CliPage {
+            shell,
             error: Some(format!(
                 "This login link is not valid: {message}. Run kfm login again."
             )),
@@ -217,12 +219,13 @@ async fn page(
     MaybeSession(session): MaybeSession,
     query: Result<Query<PageQuery>, QueryRejection>,
 ) -> AppResult<Response> {
+    let shell = portal::Shell::load(&state.db, session.as_ref(), portal::nav::NONE).await?;
     let Ok(Query(q)) = query else {
-        return error_page("the query is malformed");
+        return error_page(shell, "the query is malformed");
     };
     let request = match parse_request(q.port.as_deref(), q.state.as_deref(), q.host.as_deref()) {
         Ok(request) => request,
-        Err(message) => return error_page(message),
+        Err(message) => return error_page(shell, message),
     };
     let Some(session) = session else {
         let next: String =
@@ -230,6 +233,7 @@ async fn page(
         return render(
             StatusCode::OK,
             CliPage {
+                shell,
                 error: None,
                 sign_in: Provider::ALL
                     .iter()
@@ -246,6 +250,7 @@ async fn page(
     render(
         StatusCode::OK,
         CliPage {
+            shell,
             error: None,
             sign_in: Vec::new(),
             confirm: Some(ConfirmView {

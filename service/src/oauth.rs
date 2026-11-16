@@ -560,7 +560,11 @@ async fn finish(
     }
     let location = match (outcome, next) {
         (_, Some(next)) => next,
-        (Outcome::Linked(_), None) => format!("/?linked={}", profile.provider.as_str()),
+        (Outcome::Linked(_), None) => format!(
+            "{}?linked={}",
+            crate::portal::ACCOUNT_PAGE,
+            profile.provider.as_str()
+        ),
         _ => "/".to_owned(),
     };
     Ok(see_other(&location, cookies))

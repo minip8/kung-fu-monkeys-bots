@@ -1,24 +1,29 @@
 //! The portal: server-rendered HTML (askama) over the same service functions
-//! as the JSON routes. Forms post urlencoded to `/portal/...`, carry the
-//! session's CSRF token in a `csrf` field and answer 303 back to `/` (with
-//! `?error=<code>` on failure), except token creation, which renders the page
-//! with the secret once. No JavaScript. Signed out, `/` is the landing page;
-//! `/docs/contest` is the contest guide.
+//! as the JSON routes. Every page is framed by `templates/base.html`, whose
+//! sidebar a [`Shell`] fills. Signed in, the account is split into pages:
+//! `/` (home), `/team`, `/submissions`, `/tokens` and `/account`; signed
+//! out, `/` is the landing page and the other four answer `303` to `/`.
+//! Forms post urlencoded to `/portal/...`, carry the session's CSRF token in
+//! a `csrf` field and answer `303` back to the page the form lives on (with
+//! `?error=<code>` on failure), except token creation, which renders
+//! `/tokens` with the secret once. No JavaScript. `/docs/contest` is the
+//! contest guide.
 
 use askama::Template;
 use axum::extract::multipart::MultipartRejection;
 use axum::extract::rejection::QueryRejection;
-use axum::extract::{DefaultBodyLimit, Multipart, Query, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, LOCATION};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Multipart, Query, Request, State};
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, LOCATION};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
+use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::auth::{MaybeSession, Session};
+use crate::auth::{Caller, MaybeSession, Session};
 use crate::error::{ApiError, ApiResult, AppError, AppResult, ErrorCode};
 use crate::extract::{ApiPath, FormBody};
 use crate::ladder::{self, LadderQuery, MatchDetail, MatchSummary, MatchesQuery, Standing};
@@ -26,11 +31,8 @@ use crate::oauth::Provider;
 use crate::tokens::{self, Scope};
 use crate::{manifest, seasons, submissions, teams, users, AppState};
 
-/// The games a team's section lists.
+/// The games a team's page lists.
 const RECENT_MATCHES: i64 = 10;
-/// The teams and the games the landing page shows.
-const LANDING_TEAMS: i64 = 5;
-const LANDING_GAMES: i64 = 5;
 /// The games under a season's board.
 const LADDER_GAMES: i64 = 8;
 
@@ -40,9 +42,18 @@ const LADDER_GAMES: i64 = 8;
 /// until the guide has been read against the new release's content.
 pub const CONTEST_GUIDE_ENGINE: &str = "v0.11.0";
 
+/// The account's pages (each `303` to `/` when signed out).
+pub const TEAM_PAGE: &str = "/team";
+pub const SUBMISSIONS_PAGE: &str = "/submissions";
+pub const TOKENS_PAGE: &str = "/tokens";
+pub const ACCOUNT_PAGE: &str = "/account";
+
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/", get(index))
+        .route("/", get(home::index))
+        .route(TEAM_PAGE, get(team_page))
+        .route(SUBMISSIONS_PAGE, get(submissions_page))
+        .route(ACCOUNT_PAGE, get(account_page))
         .route("/privacy", get(privacy))
         .route("/docs/contest", get(contest))
         .route("/favicon.svg", get(favicon_svg))
@@ -62,6 +73,69 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/portal/teams/{id}/active", post(activate))
 }
+
+// ---------------------------------------------------------------------------
+// The shell: what `base.html`'s sidebar needs on every page.
+
+/// The sidebar's entries, as [`Shell::nav`] names the current one.
+pub mod nav {
+    pub const HOME: &str = "home";
+    pub const GUIDE: &str = "guide";
+    pub const TEAM: &str = "team";
+    pub const LADDER: &str = "ladder";
+    pub const GAMES: &str = "games";
+    pub const SUBMISSIONS: &str = "submissions";
+    pub const TOKENS: &str = "tokens";
+    pub const ACCOUNT: &str = "account";
+    /// A page no entry stands for (privacy, the CLI login).
+    pub const NONE: &str = "";
+}
+
+/// The signed-in person as the sidebar shows them.
+pub struct ShellUser {
+    pub name: String,
+    /// The name's first character, for the avatar square.
+    pub initial: String,
+    /// The session's CSRF token, for the sidebar's sign-out form.
+    pub csrf: String,
+}
+
+/// What every page's frame needs: who is signed in and which sidebar entry
+/// is the current page. Every page template has a `shell` field.
+pub struct Shell {
+    pub user: Option<ShellUser>,
+    pub nav: &'static str,
+}
+
+impl Shell {
+    /// The shell for `session`: one primary-key lookup of the display name
+    /// when signed in, nothing when signed out.
+    pub async fn load(
+        db: &PgPool,
+        session: Option<&Session>,
+        nav: &'static str,
+    ) -> AppResult<Shell> {
+        let user = match session {
+            Some(session) => {
+                let row: Option<(String,)> =
+                    sqlx::query_as("SELECT display_name FROM users WHERE id = $1")
+                        .bind(session.user_id)
+                        .fetch_optional(db)
+                        .await?;
+                row.map(|(name,)| ShellUser {
+                    initial: name.chars().next().map(String::from).unwrap_or_default(),
+                    name,
+                    csrf: session.csrf.clone(),
+                })
+            }
+            None => None,
+        };
+        Ok(Shell { user, nav })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Views shared by the pages.
 
 struct ProviderView {
     slug: &'static str,
@@ -112,56 +186,59 @@ struct MatchLine {
     faulted: bool,
 }
 
+/// A team's standing in the current season.
+struct RatingView {
+    season: String,
+    rank: i64,
+    rating: i64,
+    rd: i64,
+    games: i32,
+    wins: i32,
+    draws: i32,
+    losses: i32,
+    /// The whole standing as one sentence.
+    line: String,
+}
+
+fn rating_view(r: &ladder::TeamRating) -> RatingView {
+    RatingView {
+        season: r.season.clone(),
+        rank: r.rank,
+        rating: r.rating,
+        rd: r.rd,
+        games: r.games,
+        wins: r.wins,
+        draws: r.draws,
+        losses: r.losses,
+        line: format!(
+            "Season {}: rank {}, rating {} ± {}, {} game(s): {} won, {} drawn, {} lost.",
+            r.season, r.rank, r.rating, r.rd, r.games, r.wins, r.draws, r.losses
+        ),
+    }
+}
+
+/// A team as `/team` and the home show it: members, standing, recent games.
 struct TeamView {
     id: Uuid,
     name: String,
     role: String,
     is_owner: bool,
     members: Vec<MemberView>,
-    submissions: Vec<SubmissionView>,
-    /// The current season's standing as a line, or empty.
-    rating: String,
+    rating: Option<RatingView>,
     matches: Vec<MatchLine>,
 }
 
-struct UserView {
+/// A team's submissions, as `/submissions` lists them.
+struct SubmissionsView {
     id: Uuid,
     name: String,
-    csrf: String,
-    providers: Vec<ProviderView>,
-    tokens: Vec<TokenView>,
-    teams: Vec<TeamView>,
-    /// Whether the "Create team" form is shown: an account without a team,
-    /// or an operator's (v1.5).
-    can_create_team: bool,
+    submissions: Vec<SubmissionView>,
 }
 
 struct NewTokenView {
     name: String,
     scope: String,
     secret: String,
-}
-
-#[derive(Template)]
-#[template(path = "index.html")]
-struct IndexPage {
-    user: Option<UserView>,
-    error: Option<String>,
-    notice: Option<String>,
-    new_token: Option<NewTokenView>,
-    /// What a signed-out visitor sees instead of the account.
-    landing: Option<LandingView>,
-    engine_tag: String,
-}
-
-/// The landing page's live parts: the season, the top of its board and its
-/// latest games.
-struct LandingView {
-    season: Option<SeasonLine>,
-    top: Vec<StandingView>,
-    games: Vec<GameLine>,
-    /// The scheduler's round interval in whole minutes (0 under a minute).
-    round_minutes: u64,
 }
 
 /// A recorded game as a list shows it: side A, the score, side B.
@@ -178,6 +255,24 @@ struct GameLine {
     ticks: i32,
     /// The tick cap ended it (a draw).
     capped: bool,
+    a_team: Uuid,
+    b_team: Uuid,
+    /// Whether the side is a team of the viewer's ([`GameLine::mark`]).
+    a_mine: bool,
+    b_mine: bool,
+}
+
+impl GameLine {
+    /// Marks the sides that are one of `mine` (the viewer's teams).
+    fn mark(mut self, mine: &[Uuid]) -> GameLine {
+        self.a_mine = mine.contains(&self.a_team);
+        self.b_mine = mine.contains(&self.b_team);
+        self
+    }
+
+    fn mine(&self) -> bool {
+        self.a_mine || self.b_mine
+    }
 }
 
 fn game_line(m: &MatchSummary) -> GameLine {
@@ -194,6 +289,10 @@ fn game_line(m: &MatchSummary) -> GameLine {
         b_won: m.winner == Some(b.team_id),
         ticks: m.ticks,
         capped: m.end == "cap",
+        a_team: a.team_id,
+        b_team: b.team_id,
+        a_mine: false,
+        b_mine: false,
     }
 }
 
@@ -234,11 +333,9 @@ fn when(at: OffsetDateTime) -> String {
     )
 }
 
-async fn user_view(state: &AppState, session: &Session) -> AppResult<UserView> {
-    let db = &state.db;
-    let user = users::get_user(db, session.user_id).await?;
-    let identities = users::identities(db, session.user_id).await?;
-    let providers = Provider::ALL
+async fn provider_views(db: &PgPool, user: Uuid) -> AppResult<Vec<ProviderView>> {
+    let identities = users::identities(db, user).await?;
+    Ok(Provider::ALL
         .iter()
         .map(|p| {
             let found = identities.iter().find(|i| i.provider == p.as_str());
@@ -257,8 +354,11 @@ async fn user_view(state: &AppState, session: &Session) -> AppResult<UserView> {
                     .unwrap_or_default(),
             }
         })
-        .collect();
-    let tokens = tokens::list_tokens(db, session.user_id)
+        .collect())
+}
+
+async fn token_views(db: &PgPool, user: Uuid) -> AppResult<Vec<TokenView>> {
+    Ok(tokens::list_tokens(db, user)
         .await?
         .into_iter()
         .map(|t| TokenView {
@@ -268,11 +368,42 @@ async fn user_view(state: &AppState, session: &Session) -> AppResult<UserView> {
             created: when(t.created_at),
             last_used: t.last_used_at.map_or_else(|| "never".to_owned(), when),
         })
-        .collect();
-    let mut team_views = Vec::new();
-    for summary in teams::my_teams(db, session.user_id).await? {
+        .collect())
+}
+
+/// The caller's teams with their members, standing and last ten games.
+async fn team_views(db: &PgPool, user: Uuid) -> AppResult<Vec<TeamView>> {
+    let mut views = Vec::new();
+    for summary in teams::my_teams(db, user).await? {
         let team = teams::get_team(db, summary.id).await?;
-        let submissions = submissions::list_rows(db, team.id)
+        let (recent, _) = ladder::list_matches(db, Some(team.id), None, 1, RECENT_MATCHES).await?;
+        views.push(TeamView {
+            id: team.id,
+            name: team.name,
+            is_owner: summary.role == "owner",
+            role: summary.role,
+            members: team
+                .members
+                .into_iter()
+                .map(|m| MemberView {
+                    is_me: m.user_id == user,
+                    user_id: m.user_id,
+                    name: m.display_name,
+                    role: m.role,
+                })
+                .collect(),
+            rating: team.rating.as_ref().map(rating_view),
+            matches: recent.iter().map(|m| match_line(m, team.id)).collect(),
+        });
+    }
+    Ok(views)
+}
+
+/// The caller's teams with the submissions retention keeps.
+async fn submissions_views(db: &PgPool, user: Uuid) -> AppResult<Vec<SubmissionsView>> {
+    let mut views = Vec::new();
+    for summary in teams::my_teams(db, user).await? {
+        let submissions = submissions::list_rows(db, summary.id)
             .await?
             .into_iter()
             .map(|row| SubmissionView {
@@ -295,47 +426,13 @@ async fn user_view(state: &AppState, session: &Session) -> AppResult<UserView> {
                 state: row.state,
             })
             .collect();
-        let rating = team
-            .rating
-            .as_ref()
-            .map(|r| {
-                format!(
-                    "Season {}: rank {}, rating {} ± {}, {} game(s): {} won, {} drawn, {} lost.",
-                    r.season, r.rank, r.rating, r.rd, r.games, r.wins, r.draws, r.losses
-                )
-            })
-            .unwrap_or_default();
-        let (recent, _) = ladder::list_matches(db, Some(team.id), None, 1, RECENT_MATCHES).await?;
-        let matches = recent.iter().map(|m| match_line(m, team.id)).collect();
-        team_views.push(TeamView {
-            id: team.id,
-            name: team.name,
-            is_owner: summary.role == "owner",
-            role: summary.role,
-            members: team
-                .members
-                .into_iter()
-                .map(|m| MemberView {
-                    is_me: m.user_id == session.user_id,
-                    user_id: m.user_id,
-                    name: m.display_name,
-                    role: m.role,
-                })
-                .collect(),
+        views.push(SubmissionsView {
+            id: summary.id,
+            name: summary.name,
             submissions,
-            rating,
-            matches,
         });
     }
-    Ok(UserView {
-        id: user.id,
-        name: user.display_name,
-        csrf: session.csrf.clone(),
-        providers,
-        tokens,
-        can_create_team: user.operator || team_views.is_empty(),
-        teams: team_views,
-    })
+    Ok(views)
 }
 
 /// A portal page: HTML, never cached (it may show a token's secret), framed by
@@ -367,53 +464,21 @@ pub(crate) fn page_response_csp(status: StatusCode, html: String, csp: &'static 
     response
 }
 
-async fn render(
-    state: &AppState,
-    session: Option<&Session>,
-    error: Option<String>,
-    notice: Option<String>,
-    new_token: Option<NewTokenView>,
-) -> AppResult<Response> {
-    let (user, landing) = match session {
-        Some(session) => (Some(user_view(state, session).await?), None),
-        None => (None, Some(landing_view(state).await?)),
-    };
-    let html = IndexPage {
-        user,
-        error,
-        notice,
-        new_token,
-        landing,
-        engine_tag: state.config.engine_tag.clone(),
-    }
-    .render()
-    .map_err(AppError::internal)?;
+/// Renders a page template with the portal's headers.
+fn html_page(page: &impl Template) -> AppResult<Response> {
+    let html = page.render().map_err(AppError::internal)?;
     Ok(page_response(StatusCode::OK, html))
 }
 
-async fn landing_view(state: &AppState) -> AppResult<LandingView> {
-    let db = &state.db;
-    let season = ladder::season_param(db, None).await?;
-    let now = seasons::db_now(db).await?;
-    let (top, games) = match &season {
-        Some(s) => (
-            ladder::standings(db, s.id, 1, LANDING_TEAMS).await?.0,
-            ladder::list_matches(db, None, Some(s.id), 1, LANDING_GAMES)
-                .await?
-                .0,
-        ),
-        None => (Vec::new(), Vec::new()),
-    };
-    Ok(LandingView {
-        season: season.as_ref().map(|s| season_line(s, now)),
-        top: top.into_iter().map(standing_view).collect(),
-        games: games.iter().map(game_line).collect(),
-        round_minutes: state.config.round_seconds / 60,
-    })
+fn see_other(location: &str) -> Response {
+    (StatusCode::SEE_OTHER, [(LOCATION, location.to_owned())]).into_response()
 }
 
+// ---------------------------------------------------------------------------
+// `?error=` and `?linked=`.
+
 #[derive(Deserialize)]
-struct IndexQuery {
+struct MessageQuery {
     error: Option<String>,
     /// What exactly was refused (`bad_manifest`, `bad_source` only).
     detail: Option<String>,
@@ -425,42 +490,216 @@ const DETAILED: [ErrorCode; 2] = [ErrorCode::BadManifest, ErrorCode::BadSource];
 /// The longest detail shown.
 const MAX_DETAIL_CHARS: usize = 300;
 
-/// `GET /`: sign in when signed out; the account, tokens and teams when signed in.
-async fn index(
-    State(state): State<AppState>,
-    MaybeSession(session): MaybeSession,
-    query: Result<Query<IndexQuery>, QueryRejection>,
-) -> AppResult<Response> {
-    let query = query.ok().map(|Query(q)| q);
-    let error = query
-        .as_ref()
-        .and_then(|q| q.error.as_deref())
-        .and_then(ErrorCode::parse)
-        .map(|code| {
-            let detail = query
-                .as_ref()
-                .and_then(|q| q.detail.as_deref())
-                .filter(|_| DETAILED.contains(&code))
-                .map(|d| d.chars().take(MAX_DETAIL_CHARS).collect::<String>());
-            ApiError { code, detail }.message()
-        });
-    let notice = query
-        .as_ref()
-        .and_then(|q| q.linked.as_deref())
+/// A page's error (from `?error=<code>`, with `&detail=` for the codes that
+/// carry one) and notice (from `?linked=<provider>`).
+fn messages(
+    query: Result<Query<MessageQuery>, QueryRejection>,
+) -> (Option<String>, Option<String>) {
+    let Ok(Query(q)) = query else {
+        return (None, None);
+    };
+    let error = q.error.as_deref().and_then(ErrorCode::parse).map(|code| {
+        let detail = q
+            .detail
+            .as_deref()
+            .filter(|_| DETAILED.contains(&code))
+            .map(|d| d.chars().take(MAX_DETAIL_CHARS).collect::<String>());
+        ApiError { code, detail }.message()
+    });
+    let notice = q
+        .linked
+        .as_deref()
         .and_then(|slug| Provider::ALL.into_iter().find(|p| p.as_str() == slug))
         .map(|p| format!("{} is now linked to your account.", p.label()));
-    render(&state, session.as_ref(), error, notice, None).await
+    (error, notice)
 }
 
-fn back(error: Option<AppError>) -> Response {
-    back_detailed(error.map(ApiError::from))
+// ---------------------------------------------------------------------------
+// `/`: the landing page or the home, in `portal/home.rs`.
+
+mod home;
+
+// ---------------------------------------------------------------------------
+// `/team`, `/submissions`, `/tokens`, `/account`.
+
+#[derive(Template)]
+#[template(path = "team.html")]
+struct TeamPage {
+    shell: Shell,
+    error: Option<String>,
+    notice: Option<String>,
+    teams: Vec<TeamView>,
+    /// Whether the "Create team" form is shown: an account without a team,
+    /// or an operator's (v1.5).
+    can_create_team: bool,
+    user_id: Uuid,
+    /// The session's CSRF token, for the page's forms.
+    csrf: String,
 }
 
-/// Back to `/`, with `?error=<code>` and, for a detailed error, `&detail=`.
-fn back_detailed(error: Option<ApiError>) -> Response {
+/// `GET /team` (session; `303` to `/` without): the caller's team, its
+/// members (add, remove, leave), rename, its standing and last ten games;
+/// the create form when the account may make one.
+async fn team_page(
+    State(state): State<AppState>,
+    MaybeSession(session): MaybeSession,
+    query: Result<Query<MessageQuery>, QueryRejection>,
+) -> AppResult<Response> {
+    let Some(session) = session else {
+        return Ok(see_other("/"));
+    };
+    let (error, notice) = messages(query);
+    let user = users::get_user(&state.db, session.user_id).await?;
+    let teams = team_views(&state.db, user.id).await?;
+    html_page(&TeamPage {
+        shell: Shell::load(&state.db, Some(&session), nav::TEAM).await?,
+        error,
+        notice,
+        can_create_team: user.operator || teams.is_empty(),
+        teams,
+        user_id: user.id,
+        csrf: session.csrf.clone(),
+    })
+}
+
+#[derive(Template)]
+#[template(path = "submissions.html")]
+struct SubmissionsPage {
+    shell: Shell,
+    error: Option<String>,
+    notice: Option<String>,
+    teams: Vec<SubmissionsView>,
+    csrf: String,
+}
+
+/// `GET /submissions` (session; `303` to `/` without): per team, the upload
+/// form and the submissions with their state, hash, error, log and Activate.
+async fn submissions_page(
+    State(state): State<AppState>,
+    MaybeSession(session): MaybeSession,
+    query: Result<Query<MessageQuery>, QueryRejection>,
+) -> AppResult<Response> {
+    let Some(session) = session else {
+        return Ok(see_other("/"));
+    };
+    let (error, notice) = messages(query);
+    html_page(&SubmissionsPage {
+        shell: Shell::load(&state.db, Some(&session), nav::SUBMISSIONS).await?,
+        error,
+        notice,
+        teams: submissions_views(&state.db, session.user_id).await?,
+        csrf: session.csrf.clone(),
+    })
+}
+
+#[derive(Template)]
+#[template(path = "tokens.html")]
+struct TokensPage {
+    shell: Shell,
+    error: Option<String>,
+    notice: Option<String>,
+    tokens: Vec<TokenView>,
+    /// A token just created: its secret, shown once.
+    new_token: Option<NewTokenView>,
+    csrf: String,
+}
+
+async fn render_tokens(
+    state: &AppState,
+    session: &Session,
+    error: Option<String>,
+    new_token: Option<NewTokenView>,
+) -> AppResult<Response> {
+    html_page(&TokensPage {
+        shell: Shell::load(&state.db, Some(session), nav::TOKENS).await?,
+        error,
+        notice: None,
+        tokens: token_views(&state.db, session.user_id).await?,
+        new_token,
+        csrf: session.csrf.clone(),
+    })
+}
+
+/// `GET /tokens` with `Accept: text/html` (session; `303` to `/` without):
+/// the tokens, the create form and Revoke.
+async fn tokens_page(
+    state: &AppState,
+    session: Option<Session>,
+    query: Result<Query<MessageQuery>, QueryRejection>,
+) -> AppResult<Response> {
+    let Some(session) = session else {
+        return Ok(see_other("/"));
+    };
+    let (error, _) = messages(query);
+    render_tokens(state, &session, error, None).await
+}
+
+/// The `GET /tokens` route: the page for a browser's navigation (`Accept`
+/// lists `text/html` and no `Authorization` header came), the JSON list of
+/// §6 otherwise, exactly as before.
+pub async fn tokens_route(State(state): State<AppState>, request: Request) -> AppResult<Response> {
+    let (mut parts, _) = request.into_parts();
+    if ladder::wants_html(&parts.headers) && !parts.headers.contains_key(AUTHORIZATION) {
+        let MaybeSession(session) = MaybeSession::from_request_parts(&mut parts, &state).await?;
+        return tokens_page(&state, session, Query::try_from_uri(&parts.uri)).await;
+    }
+    let caller = Caller::from_request_parts(&mut parts, &state).await?;
+    tokens::list(State(state), caller)
+        .await
+        .map(IntoResponse::into_response)
+}
+
+#[derive(Template)]
+#[template(path = "account.html")]
+struct AccountPage {
+    shell: Shell,
+    error: Option<String>,
+    notice: Option<String>,
+    id: Uuid,
+    name: String,
+    providers: Vec<ProviderView>,
+    csrf: String,
+}
+
+/// `GET /account` (session; `303` to `/` without): the name, the user id, the
+/// linked providers with a link button for the others, sign out. Shows
+/// `?linked=<provider>` after a link.
+async fn account_page(
+    State(state): State<AppState>,
+    MaybeSession(session): MaybeSession,
+    query: Result<Query<MessageQuery>, QueryRejection>,
+) -> AppResult<Response> {
+    let Some(session) = session else {
+        return Ok(see_other("/"));
+    };
+    let (error, notice) = messages(query);
+    let user = users::get_user(&state.db, session.user_id).await?;
+    html_page(&AccountPage {
+        shell: Shell::load(&state.db, Some(&session), nav::ACCOUNT).await?,
+        error,
+        notice,
+        providers: provider_views(&state.db, user.id).await?,
+        id: user.id,
+        name: user.display_name,
+        csrf: session.csrf.clone(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// The forms.
+
+/// Back to `page`, with `?error=<code>` and, for a detailed error,
+/// `&detail=`. Signed out (`unauthenticated`), to `/?error=unauthenticated`
+/// instead: the account's pages send a signed-out browser to `/` anyway.
+fn back_detailed(page: &str, error: Option<ApiError>) -> Response {
     let location = match error {
         Some(err) => {
-            let mut location = format!("/?error={}", err.code.as_str());
+            let page = if err.code == ErrorCode::Unauthenticated {
+                "/"
+            } else {
+                page
+            };
+            let mut location = format!("{page}?error={}", err.code.as_str());
             if let Some(detail) = err.detail.filter(|_| DETAILED.contains(&err.code)) {
                 let short: String = detail.chars().take(MAX_DETAIL_CHARS).collect();
                 location.push_str("&detail=");
@@ -468,9 +707,14 @@ fn back_detailed(error: Option<ApiError>) -> Response {
             }
             location
         }
-        None => "/".to_owned(),
+        None => page.to_owned(),
     };
-    (StatusCode::SEE_OTHER, [(LOCATION, location)]).into_response()
+    see_other(&location)
+}
+
+/// A form action's outcome, as a redirect back to `page`.
+fn done(page: &str, result: AppResult<()>) -> Response {
+    back_detailed(page, result.err().map(ApiError::from))
 }
 
 /// The session behind a form, its CSRF field checked.
@@ -478,11 +722,6 @@ fn form_session(session: Option<Session>, csrf: &str) -> AppResult<Session> {
     let session = session.ok_or(AppError(ErrorCode::Unauthenticated))?;
     session.check_csrf(Some(csrf))?;
     Ok(session)
-}
-
-/// Runs a form action and redirects back to `/`.
-fn done(result: AppResult<()>) -> Response {
-    back(result.err())
 }
 
 #[derive(Deserialize)]
@@ -501,6 +740,7 @@ struct TokenForm {
     scope: String,
 }
 
+/// `POST /portal/tokens`: renders `/tokens` with the new secret, once.
 async fn create_token(
     State(state): State<AppState>,
     MaybeSession(session): MaybeSession,
@@ -516,10 +756,10 @@ async fn create_token(
             scope: info.scope,
             secret,
         };
-        render(&state, Some(&session), None, None, Some(shown)).await
+        render_tokens(&state, &session, None, Some(shown)).await
     }
     .await;
-    result.unwrap_or_else(|err| back(Some(err)))
+    result.unwrap_or_else(|err| done(TOKENS_PAGE, Err(err)))
 }
 
 async fn revoke_token(
@@ -529,6 +769,7 @@ async fn revoke_token(
     FormBody(form): FormBody<CsrfForm>,
 ) -> Response {
     done(
+        TOKENS_PAGE,
         async {
             let session = form_session(session, &form.csrf)?;
             tokens::revoke_token(&state.db, session.user_id, id).await
@@ -551,6 +792,7 @@ async fn create_team(
     FormBody(form): FormBody<TeamForm>,
 ) -> Response {
     done(
+        TEAM_PAGE,
         async {
             let session = form_session(session, &form.csrf)?;
             teams::create_team(&state.db, session.user_id, &form.name)
@@ -569,6 +811,7 @@ async fn rename_team(
     FormBody(form): FormBody<TeamForm>,
 ) -> Response {
     done(
+        TEAM_PAGE,
         async {
             let session = form_session(session, &form.csrf)?;
             teams::rename_team(&state.db, session.user_id, id, &form.name)
@@ -594,6 +837,7 @@ async fn add_member(
     FormBody(form): FormBody<MemberForm>,
 ) -> Response {
     done(
+        TEAM_PAGE,
         async {
             let session = form_session(session, &form.csrf)?;
             teams::add_member(&state.db, session.user_id, id, &form.user)
@@ -611,6 +855,7 @@ async fn remove_member(
     FormBody(form): FormBody<CsrfForm>,
 ) -> Response {
     done(
+        TEAM_PAGE,
         async {
             let session = form_session(session, &form.csrf)?;
             teams::remove_member(&state.db, session.user_id, id, user).await
@@ -651,7 +896,7 @@ async fn submit(
             .map(|_| ())
     }
     .await;
-    back_detailed(result.err())
+    back_detailed(SUBMISSIONS_PAGE, result.err())
 }
 
 #[derive(Deserialize)]
@@ -668,6 +913,7 @@ async fn activate(
     FormBody(form): FormBody<ActivateForm>,
 ) -> Response {
     done(
+        SUBMISSIONS_PAGE,
         async {
             let session = form_session(session, &form.csrf)?;
             submissions::activate(&state, id, session.user_id, form.submission)
@@ -677,6 +923,9 @@ async fn activate(
         .await,
     )
 }
+
+// ---------------------------------------------------------------------------
+// The public pages: the ladder, the games, a game, the guide, privacy.
 
 struct SeasonLine {
     name: String,
@@ -701,9 +950,25 @@ fn season_line(s: &seasons::Season, now: OffsetDateTime) -> SeasonLine {
     }
 }
 
+/// The teams of the signed-in viewer (one, or an operator's several), for
+/// marking their rows on the public pages; none when signed out.
+pub(crate) async fn viewer_teams(db: &PgPool, session: Option<&Session>) -> AppResult<Vec<Uuid>> {
+    let Some(session) = session else {
+        return Ok(Vec::new());
+    };
+    let rows: Vec<(Uuid,)> =
+        sqlx::query_as("SELECT team_id FROM memberships WHERE user_id = $1 ORDER BY joined_at")
+            .bind(session.user_id)
+            .fetch_all(db)
+            .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 struct StandingView {
     rank: i64,
     team_id: Uuid,
+    /// The viewer's team: its row is marked.
+    mine: bool,
     name: String,
     rating: i64,
     rd: i64,
@@ -714,9 +979,10 @@ struct StandingView {
     hash: String,
 }
 
-fn standing_view(r: Standing) -> StandingView {
+fn standing_view(r: Standing, mine: &[Uuid]) -> StandingView {
     StandingView {
         rank: r.rank,
+        mine: mine.contains(&r.team_id),
         team_id: r.team_id,
         name: r.name,
         rating: r.rating,
@@ -735,6 +1001,7 @@ fn standing_view(r: Standing) -> StandingView {
 #[derive(Template)]
 #[template(path = "ladder.html")]
 struct LadderPage {
+    shell: Shell,
     title: String,
     season: Option<SeasonLine>,
     seasons: Vec<SeasonLink>,
@@ -743,6 +1010,7 @@ struct LadderPage {
     games: Vec<GameLine>,
     /// The season's page of `/matches`.
     games_url: String,
+    page: i64,
     prev: Option<String>,
     next: Option<String>,
     engine_tag: String,
@@ -754,11 +1022,16 @@ fn encode(text: &str) -> String {
 
 /// `GET /ladder` for a browser: the board of a season, paged, with links to
 /// the other seasons and the season's latest games.
-pub async fn ladder_page(state: &AppState, query: &LadderQuery) -> AppResult<Response> {
+pub async fn ladder_page(
+    state: &AppState,
+    session: Option<&Session>,
+    query: &LadderQuery,
+) -> AppResult<Response> {
     let page = ladder::page_param(query.page.as_deref())?;
     let season = ladder::season_param(&state.db, query.season.as_deref()).await?;
     let now = seasons::db_now(&state.db).await?;
     let all = seasons::list(&state.db).await?;
+    let mine = viewer_teams(&state.db, session).await?;
     let (rows, more) = match &season {
         Some(s) => ladder::standings(&state.db, s.id, page, ladder::LADDER_PAGE).await?,
         None => (Vec::new(), false),
@@ -780,6 +1053,7 @@ pub async fn ladder_page(state: &AppState, query: &LadderQuery) -> AppResult<Res
         url
     };
     let html = LadderPage {
+        shell: Shell::load(&state.db, session, nav::LADDER).await?,
         title: season
             .as_ref()
             .map_or_else(|| "no season".to_owned(), |s| s.name.clone()),
@@ -792,12 +1066,13 @@ pub async fn ladder_page(state: &AppState, query: &LadderQuery) -> AppResult<Res
             })
             .collect(),
         season: season.as_ref().map(|s| season_line(s, now)),
-        rows: rows.into_iter().map(standing_view).collect(),
-        games: games.iter().map(game_line).collect(),
+        rows: rows.into_iter().map(|r| standing_view(r, &mine)).collect(),
+        games: games.iter().map(|g| game_line(g).mark(&mine)).collect(),
         games_url: season.as_ref().map_or_else(
             || "/matches".to_owned(),
             |s| format!("/matches?season={}", encode(&s.name)),
         ),
+        page,
         prev: (page > 1).then(|| link(page - 1)),
         next: more.then(|| link(page + 1)),
         engine_tag: state.config.engine_tag.clone(),
@@ -809,8 +1084,9 @@ pub async fn ladder_page(state: &AppState, query: &LadderQuery) -> AppResult<Res
 
 struct SideView {
     label: &'static str,
-    /// The team's name with the mode's team index it played.
-    name: String,
+    team_id: Uuid,
+    /// One of the viewer's teams.
+    mine: bool,
     team_name: String,
     team: i16,
     won: bool,
@@ -824,6 +1100,7 @@ struct SideView {
 #[derive(Template)]
 #[template(path = "match.html")]
 struct MatchPage {
+    shell: Shell,
     title: String,
     season: String,
     round: String,
@@ -833,6 +1110,12 @@ struct MatchPage {
     engine_tag: String,
     outcome: String,
     ending: &'static str,
+    /// Whether the tick cap ended it.
+    capped: bool,
+    /// The arena's drawing in `templates/maps/` (its name) and its size;
+    /// empty for an arena the site has no drawing of.
+    map: &'static str,
+    map_size: &'static str,
     sides: Vec<SideView>,
     score_a: i32,
     score_b: i32,
@@ -864,9 +1147,18 @@ fn fault_line(fault: &serde_json::Value) -> String {
     format!("slot {}: {}", n("slot"), parts.join(", "))
 }
 
+/// The arenas drawn in `templates/maps/` (the contest's pool), with their
+/// size in cells: the game page includes the drawing of its arena.
+const MAPS: [(&str, &str); 4] = [
+    ("grove", "24 × 14"),
+    ("orchards", "28 × 16"),
+    ("gorge", "26 × 16"),
+    ("burrows", "20 × 12"),
+];
+
 /// `GET /matches/{m}` for a browser: the game's sides, its replay links and
 /// its raw result.
-pub fn match_page(detail: &MatchDetail) -> AppResult<Response> {
+pub fn match_page(shell: Shell, mine: &[Uuid], detail: &MatchDetail) -> AppResult<Response> {
     let m = &detail.summary;
     let outcome = match m.winner {
         None => "A draw".to_owned(),
@@ -879,12 +1171,22 @@ pub fn match_page(detail: &MatchDetail) -> AppResult<Response> {
             format!("{name} won")
         }
     };
+    let arena = m.arena.clone().unwrap_or_default();
+    let (map, map_size) = MAPS
+        .iter()
+        .find(|(name, _)| *name == arena)
+        .copied()
+        .unwrap_or(("", ""));
     let html = MatchPage {
+        shell,
         title: format!("{} v {}", m.sides[0].name, m.sides[1].name),
         season: m.season.clone().unwrap_or_default(),
         round: m.round.map(|r| r.to_string()).unwrap_or_default(),
         game: m.game + 1,
-        arena: m.arena.clone().unwrap_or_default(),
+        arena,
+        map,
+        map_size,
+        capped: m.end == "cap",
         when: when(m.created_at),
         engine_tag: m.engine_tag.clone(),
         outcome,
@@ -899,7 +1201,8 @@ pub fn match_page(detail: &MatchDetail) -> AppResult<Response> {
             .zip(["A", "B"])
             .map(|(s, label)| SideView {
                 label,
-                name: format!("{} (team {})", s.name, s.team),
+                team_id: s.team_id,
+                mine: mine.contains(&s.team_id),
                 team_name: s.name.clone(),
                 team: s.team,
                 won: m.winner == Some(s.team_id),
@@ -932,20 +1235,50 @@ pub fn match_page(detail: &MatchDetail) -> AppResult<Response> {
 #[derive(Template)]
 #[template(path = "matches.html")]
 struct MatchesPage {
+    shell: Shell,
     title: String,
     /// The team whose games these are, when `?team=` names one.
     team: Option<String>,
     season: Option<String>,
     /// Whether a team or a season narrows the list.
     filtered: bool,
+    /// The list without the team filter, and without the season filter.
+    drop_team: String,
+    drop_season: String,
+    /// The viewer's team and its list, unless that is the list shown.
+    mine: Option<(String, String)>,
     games: Vec<GameLine>,
+    page: i64,
     prev: Option<String>,
     next: Option<String>,
 }
 
+/// `/matches` with these filters (and a page past the first).
+fn matches_url(team: Option<Uuid>, season: Option<&str>, page: i64) -> String {
+    let mut query = Vec::new();
+    if page > 1 {
+        query.push(format!("page={page}"));
+    }
+    if let Some(id) = team {
+        query.push(format!("team={id}"));
+    }
+    if let Some(name) = season {
+        query.push(format!("season={}", encode(name)));
+    }
+    if query.is_empty() {
+        "/matches".to_owned()
+    } else {
+        format!("/matches?{}", query.join("&"))
+    }
+}
+
 /// `GET /matches` for a browser: recorded games, newest first, paged, of
 /// every team and season unless the query narrows it.
-pub async fn matches_page(state: &AppState, query: &MatchesQuery) -> AppResult<Response> {
+pub async fn matches_page(
+    state: &AppState,
+    session: Option<&Session>,
+    query: &MatchesQuery,
+) -> AppResult<Response> {
     let filter = ladder::matches_filter(&state.db, query).await?;
     let (matches, more) = ladder::list_matches(
         &state.db,
@@ -959,25 +1292,38 @@ pub async fn matches_page(state: &AppState, query: &MatchesQuery) -> AppResult<R
         Some(id) => teams::team_name(&state.db, id).await?,
         None => None,
     };
+    let season_name = filter.season.as_ref().map(|s| s.name.as_str());
     let link = |p: i64| {
         let mut url = format!("/matches?page={p}");
         if let Some(id) = filter.team {
             url.push_str(&format!("&team={id}"));
         }
-        if let Some(s) = &filter.season {
+        if let Some(name) = season_name {
             url.push_str("&season=");
-            url.push_str(&encode(&s.name));
+            url.push_str(&encode(name));
         }
         url
     };
+    let viewer = viewer_teams(&state.db, session).await?;
+    let mine = match viewer.first() {
+        Some(&id) if filter.team != Some(id) => teams::team_name(&state.db, id)
+            .await?
+            .map(|name| (name, matches_url(Some(id), season_name, 1))),
+        _ => None,
+    };
     let html = MatchesPage {
+        shell: Shell::load(&state.db, session, nav::GAMES).await?,
         title: team
             .as_ref()
             .map_or_else(|| "Games".to_owned(), |name| format!("Games of {name}")),
         filtered: filter.team.is_some() || filter.season.is_some(),
         team,
         season: filter.season.as_ref().map(|s| s.name.clone()),
-        games: matches.iter().map(game_line).collect(),
+        drop_team: matches_url(None, season_name, 1),
+        drop_season: matches_url(filter.team, None, 1),
+        mine,
+        games: matches.iter().map(|g| game_line(g).mark(&viewer)).collect(),
+        page: filter.page,
         prev: (filter.page > 1).then(|| link(filter.page - 1)),
         next: more.then(|| link(filter.page + 1)),
     }
@@ -989,6 +1335,7 @@ pub async fn matches_page(state: &AppState, query: &MatchesQuery) -> AppResult<R
 #[derive(Template)]
 #[template(path = "contest.html")]
 struct ContestPage {
+    shell: Shell,
     /// The release the guide was written for.
     guide_tag: &'static str,
     /// The release the service plays.
@@ -1001,9 +1348,13 @@ struct ContestPage {
 }
 
 /// `GET /docs/contest` (auth: none): the contest guide.
-async fn contest(State(state): State<AppState>) -> AppResult<Response> {
+async fn contest(
+    State(state): State<AppState>,
+    MaybeSession(session): MaybeSession,
+) -> AppResult<Response> {
     let config = &state.config;
     let html = ContestPage {
+        shell: Shell::load(&state.db, session.as_ref(), nav::GUIDE).await?,
         guide_tag: CONTEST_GUIDE_ENGINE,
         stale: config.engine_tag != CONTEST_GUIDE_ENGINE,
         engine_tag: config.engine_tag.clone(),
@@ -1051,6 +1402,7 @@ pub const PRIVACY_DATE: &str = "2026-11-07";
 #[derive(Template)]
 #[template(path = "privacy.html")]
 struct PrivacyPage {
+    shell: Shell,
     contact: String,
     /// A link for the contact when it is a URL or an email address.
     contact_href: Option<String>,
@@ -1072,9 +1424,13 @@ fn contact_href(contact: &str) -> Option<String> {
 }
 
 /// `GET /privacy` (auth: none): what the service stores and why.
-async fn privacy(State(state): State<AppState>) -> AppResult<Response> {
+async fn privacy(
+    State(state): State<AppState>,
+    MaybeSession(session): MaybeSession,
+) -> AppResult<Response> {
     let contact = state.config.contact.clone();
     let html = PrivacyPage {
+        shell: Shell::load(&state.db, session.as_ref(), nav::NONE).await?,
         contact_href: contact_href(&contact),
         contact,
         replay_hours: state.config.replay_hours,

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}API tokens: Kung Fu Monkeys bot ladder{% endblock %}
+{% block page %}pg-tokens{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Build · API tokens</p>
+    <h1>API tokens</h1>
+    <p class="sub">The <code>kfm</code> command line tool sends one as a bearer; <code>kfm login</code> makes a <code>submit</code> token for you. A <code>read</code> token can only look.</p>
+  </div>
+</div>
+{% include "alerts.html" %}
+{% if let Some(t) = new_token %}
+<div class="notice">New {{ t.scope }} token <strong>{{ t.name }}</strong>. Copy it now: it is not shown again.
+  <code class="secret">{{ t.secret }}</code></div>
+{% endif %}
+
+<div class="panels">
+  <section class="panel span-8">
+    <p class="eyebrow"><span class="n">01</span> / Tokens</p>
+    <h2>Your tokens</h2>
+    {% if tokens.is_empty() %}<p class="muted">No tokens yet.</p>
+    {% else %}
+    <div class="scroll"><table>
+      <tr><th>Name</th><th>Scope</th><th>Created</th><th>Last used</th><th></th></tr>
+      {% for t in tokens %}
+      <tr>
+        <td class="team">{{ t.name }}</td><td><span class="chip">{{ t.scope }}</span></td><td class="when">{{ t.created }}</td><td class="when">{{ t.last_used }}</td>
+        <td class="act"><form class="inline" method="post" action="/portal/tokens/{{ t.id }}/revoke">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger" type="submit">Revoke</button></form></td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    {% endif %}
+  </section>
+  <section class="panel span-4">
+    <p class="eyebrow"><span class="n">02</span> / New</p>
+    <h2>Create a token</h2>
+    <form class="row" method="post" action="/portal/tokens">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="text" name="name" placeholder="Token name (laptop, CI)" aria-label="Token name" maxlength="64" required>
+      <select name="scope" aria-label="Scope"><option value="submit">submit</option><option value="read">read</option></select>
+      <button type="submit">Create token</button>
+    </form>
+    <p class="muted small" style="margin-top:14px">The secret is shown once, on the next page. Revoke a token you no longer use.</p>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Account: Kung Fu Monkeys bot ladder{% endblock %}
+{% block page %}pg-account{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Account</p>
+    <h1>{{ name }}</h1>
+    <p class="sub">User id <code>{{ id }}</code> (teammates add you by it or by your name).</p>
+  </div>
+</div>
+{% include "alerts.html" %}
+
+<div class="panels">
+  <section class="panel span-8">
+    <p class="eyebrow"><span class="n">01</span> / Sign-in</p>
+    <h2>Linked providers</h2>
+    <div class="scroll"><table>
+      <tr><th>Provider</th><th>Account</th><th></th></tr>
+      {% for p in providers %}
+      <tr>
+        <td class="team">{{ p.label }}</td>
+        {% if p.linked %}<td>{{ p.detail }}</td><td class="act"><span class="chip good">linked</span></td>
+        {% else %}<td class="muted">not linked</td><td class="act"><a class="button" href="/auth/{{ p.slug }}">Link {{ p.label }}</a></td>{% endif %}
+      </tr>
+      {% endfor %}
+    </table></div>
+    <p class="muted small" style="margin-top:14px">Either linked provider signs you in to this account. The name and email they report are shown only to you.</p>
+  </section>
+  <section class="panel span-4">
+    <p class="eyebrow"><span class="n">02</span> / Session</p>
+    <h2>Sign out</h2>
+    <p class="muted">Ends this browser's session. API tokens stay valid until you revoke them on <a href="/tokens">API tokens</a>.</p>
+    <form class="row" method="post" action="/auth/logout">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="quiet" type="submit">Sign out</button>
+    </form>
+    <p class="muted small" style="margin-top:14px">What is stored about you: <a href="/privacy">privacy</a>.</p>
+  </section>
+</div>
+{% endblock %}

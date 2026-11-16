@@ -260,7 +260,16 @@ async fn the_board_ranks_the_current_season_and_pages(pool: PgPool) {
     );
     assert!(html.contains("href=\"/ladder?season=Old\""), "{html}");
     let page2 = get_html(&app.base, "/ladder?page=2").await;
-    assert!(page2.contains("Team 00") && page2.contains("previous"));
+    assert!(page2.contains("Team 00") && page2.contains("rel=\"prev\" href=\"/ladder?page=1"));
+    assert!(page2.contains("Page 2"), "{page2}");
+    // The top three are marked; nobody is signed in, so no row is the viewer's.
+    assert_eq!(html.matches("<tr class=\"top\">").count(), 3, "{html}");
+    assert!(!html.contains(" me\"") && !html.contains("class=\"you\""));
+    // The season switcher marks the shown season.
+    assert!(
+        html.contains("<a href=\"/ladder?season=Now\" aria-current=\"page\">Now</a>"),
+        "{html}"
+    );
     // A team's name links to its games.
     assert!(
         html.contains(&format!(
@@ -345,13 +354,20 @@ async fn matches_filter_by_team_and_season_and_page(pool: PgPool) {
     let html = get_html(&app.base, "/matches").await;
     assert!(html.contains("<h1>Games</h1>"), "{html}");
     assert!(html.contains("Every ranked game"), "{html}");
-    assert_eq!(html.matches(">game</a>").count(), 25);
+    assert_eq!(html.matches("class=\"go\"").count(), 25);
     assert!(
-        html.contains("<td class=\"team\">Beta</td><td class=\"num\"><strong>3 – 1</strong></td><td>Gamma</td>"),
+        html.contains("<td class=\"num side won\">Beta</td><td class=\"sc\"><b class=\"won\">3</b><i> – </i><b>1</b></td><td class=\"side\">Gamma</td>"),
         "the winner in bold: {html}"
     );
-    assert!(html.contains("<code>gorge</code>"), "{html}");
-    assert!(html.contains("href=\"/matches?page=2\">next</a>"), "{html}");
+    assert!(
+        html.contains("<td class=\"opt arena\">gorge</td>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("rel=\"next\" href=\"/matches?page=2\""),
+        "{html}"
+    );
+    assert!(html.contains("All teams, all seasons"), "{html}");
     let html = get_html(
         &app.base,
         &format!("/matches?team={}&season=Now&page=1", sides[2].team),
@@ -359,8 +375,22 @@ async fn matches_filter_by_team_and_season_and_page(pool: PgPool) {
     .await;
     assert!(html.contains("<h1>Games of Gamma</h1>"), "{html}");
     assert!(html.contains("of season <strong>Now</strong>"), "{html}");
-    assert_eq!(html.matches(">game</a>").count(), 2);
-    assert!(!html.contains(">next</a>") && !html.contains(">previous</a>"));
+    assert_eq!(html.matches("class=\"go\"").count(), 2);
+    assert!(!html.contains("rel=\"next\"") && !html.contains("rel=\"prev\""));
+    // Each filter is a chip whose link drops it, keeping the other.
+    assert!(
+        html.contains(
+            "<a class=\"chip x\" href=\"/matches?season=Now\" title=\"Show every team's games\">Team: <b>Gamma</b></a>"
+        ),
+        "{html}"
+    );
+    assert!(
+        html.contains(&format!(
+            "<a class=\"chip x\" href=\"/matches?team={}\" title=\"Show every season's games\">Season: <b>Now</b></a>",
+            sides[2].team
+        )),
+        "{html}"
+    );
     let alpha2 = get_html(
         &app.base,
         &format!("/matches?team={}&page=2", sides[0].team),
@@ -368,7 +398,7 @@ async fn matches_filter_by_team_and_season_and_page(pool: PgPool) {
     .await;
     assert!(
         alpha2.contains(&format!(
-            "href=\"/matches?page=1&#38;team={}\">previous</a>",
+            "rel=\"prev\" href=\"/matches?page=1&#38;team={}\"",
             sides[0].team
         )),
         "{alpha2}"
@@ -497,6 +527,25 @@ async fn matches_filter_by_team_and_season_and_page(pool: PgPool) {
         html.contains("&#34;checksum&#34;: &#34;0badf00d&#34;"),
         "{html}"
     );
+    // With a stored replay: the viewer as the primary action and the download.
+    assert!(html.contains(">Watch the replay <svg"), "{html}");
+    assert!(html.contains(">Download the replay (.kfmr)</a>"), "{html}");
+    assert!(!html.contains("No replay is stored"), "{html}");
+    // The arena is drawn beside the scoreboard.
+    assert_eq!(html.matches("<svg class=\"map\"").count(), 1, "{html}");
+    assert!(html.contains("<b>gorge</b> · 26 × 16"), "{html}");
+    // An arena the result does not name has no drawing; a pruned replay
+    // leaves the facts and says so.
+    sqlx::query("UPDATE matches SET replay_key = NULL WHERE id = $1")
+        .bind(ab[29])
+        .execute(&pool)
+        .await
+        .unwrap();
+    let html = get_html(&app.base, &format!("/matches/{}", ab[29])).await;
+    assert!(!html.contains("<svg class=\"map\""), "{html}");
+    assert!(html.contains("No replay is stored"), "{html}");
+    assert!(!html.contains("Watch the replay"), "{html}");
+    assert!(html.contains("<dt>Seed</dt><dd>42</dd>"), "{html}");
 }
 
 #[sqlx::test]
@@ -520,8 +569,7 @@ async fn the_portal_shows_a_teams_standing_and_recent_games(pool: PgPool) {
     };
     let won = db_match(&pool, season.id, &me, &them, true, 3).await;
     let lost = db_match(&pool, season.id, &them, &me, true, 2).await;
-    let response = browser.get("/").await;
-    let html = response.text().await.unwrap();
+    let html = browser.get("/team").await.text().await.unwrap();
     assert!(
         html.contains("Season Now: rank 1, rating 1612 ± 91, 2 game(s): 1 won, 0 drawn, 1 lost."),
         "{html}"
@@ -587,6 +635,27 @@ async fn a_renamed_team_shows_its_new_name_on_the_board_and_its_past_games(pool:
     assert_eq!(shown["sides"][0]["name"], "After");
     let list = get_json(&app.base, &format!("/matches?team={mine}")).await;
     assert_eq!(list["matches"][0]["sides"][0]["name"], "After");
+    // Signed in, the viewer's own team is marked on the board, the list and
+    // the game.
+    for path in [
+        "/ladder".to_owned(),
+        "/matches".to_owned(),
+        format!("/matches/{game}"),
+    ] {
+        let request = browser
+            .http
+            .get(format!("{}{path}", app.base))
+            .header("accept", "text/html");
+        let html = browser.send(request).await.text().await.unwrap();
+        assert!(
+            html.contains("class=\"top me\"") || html.contains("class=\"me\""),
+            "{path}: {html}"
+        );
+        assert!(
+            html.contains("your team") || html.contains("class=\"you\""),
+            "{path}"
+        );
+    }
     for path in ["/ladder".to_owned(), format!("/matches/{game}")] {
         let html = get_html(&app.base, &path).await;
         assert!(html.contains("After"), "{path}");

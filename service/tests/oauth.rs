@@ -150,7 +150,7 @@ async fn a_signed_in_user_links_the_other_provider(pool: PgPool) {
     let landed = browser
         .oauth(&app, Provider::Google, FakeUser::new("g-link", "Linker G"))
         .await;
-    assert_eq!(landed, "/?linked=google");
+    assert_eq!(landed, "/account?linked=google");
     assert_eq!(
         browser.cookies["kfm_session"], session,
         "linking keeps the session"

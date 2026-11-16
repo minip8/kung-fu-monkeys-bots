@@ -1,4 +1,4 @@
-# Kung Fu Monkeys ladder API v1.10
+# Kung Fu Monkeys ladder API v1.11
 
 Status: normative, append-only from v1.0 (2026-11-07, M7 step 3a, engine architecture v0.63);
 v1.1 (2026-11-07, M7 step 3b) serves submissions; v1.2 (2026-11-07, M7 step 4) serves seasons,
@@ -11,11 +11,13 @@ from its seed, and names a game's arena (§10.3, §10.6); v1.7 (2026-11-14) is t
 landing page, the contest guide and the games as a page (§8), with no JSON route changed;
 v1.8 (2026-11-14) serves the site's icon (§8); v1.9 (2026-11-14) lets an owner rename a team
 (§7); v1.10 (2026-11-16) serves a game's replay by its id and gives games played under
-engine v0.11.0 or later a short viewer link (§10.6).
+engine v0.11.0 or later a short viewer link (§10.6); v1.11 (2026-11-16) gives the site a
+sidebar and splits the signed-in portal into `/`, `/team`, `/submissions`, `/tokens` and
+`/account`, each form returning to its own page (§8), with no JSON route changed.
 The design and its rationale are the engine's `docs/architecture.md` §8 "The ladder" and §11
 "M7 step 3 design". This file is the HTTP surface shared by the service (`service/`, the
 `kfm-ladder` binary), its portal and the `kfm` command line tool; change it here first. Every
-route below is served as of v1.10.
+route below is served as of v1.11.
 
 ## 1. Transport and conventions
 
@@ -194,7 +196,7 @@ issuer, audience, expiry and nonce. The account rule:
 
 Creating an account creates no team (§7). A callback always answers `303`: to the start's
 `next` after a sign-in or a link when it had one (v1.3), else to `/` after a sign-in and to
-`/?linked=<provider>` after a link, to `/?error=<code>` on failure (`oauth_state`,
+`/account?linked=<provider>` after a link (v1.11; `/?linked=` before), to `/?error=<code>` on failure (`oauth_state`,
 `oauth_denied`, `oauth_failed`, `already_linked`), with the session cookie set when a new
 session starts.
 
@@ -283,7 +285,9 @@ only time the secret is sent:
 
 ### `GET /tokens` (auth: session)
 
-`200 {"tokens":[<token>…]}`: the caller's live tokens, oldest first. A token object:
+`200 {"tokens":[<token>…]}`: the caller's live tokens, oldest first. (A browser's navigation,
+`Accept: text/html` without an `Authorization` header, gets the portal's token page instead;
+§8, v1.11.) A token object:
 
 | Key | Type | Present | Meaning |
 |---|---|---|---|
@@ -384,36 +388,48 @@ a team of one cannot move to another team (a route to dissolve a team is a later
 
 ## 8. The portal
 
-The portal is the same service rendered as HTML (askama templates, no JavaScript):
+The portal is the same service rendered as HTML (askama templates, no JavaScript). Every page
+is framed by one layout (v1.11): a sidebar with the site's sections (Home; the contest guide,
+the quick start and the game; Team, Ladder, Games; Submissions, API tokens), the current page
+marked, and the signed-in person's name linking to `/account` with a sign-out form, or a sign-in
+link when signed out. The signed-in account is split into pages (v1.11); signed out, each of
+`/team`, `/submissions`, `/tokens` (as a page) and `/account` answers `303` to `/`.
 
 | Method and path | What |
 |---|---|
-| `GET /` | Signed out: the landing page (v1.7): what the contest is, the quick start, sign in with GitHub or Google, and from the current season (else the one that started last) the top five of the board and the five latest games. Signed in: the account and its identities (a link button for the provider not yet linked), tokens (create, revoke), teams (create, shown to an account without a team and to an operator, v1.5; add member, leave or remove; rename, shown to an owner, v1.9) and each team's submissions (upload, the list with state, module hash, error, ranked games and faults and a link to the log, an Activate button on ready ones, the active one marked; v1.1), its standing in the current season and its last ten games with links to their pages (v1.2). Shows `?error=<code>` as the code's message (with the `&detail=` text for `bad_manifest` and `bad_source`, v1.1) and `?linked=<provider>` as a notice. |
+| `GET /` | Signed out: the landing page (v1.7): what the contest is, sign in with GitHub or Google, how a game is played, the quick start, and (v1.11) the live panels below, the top five of the board of the current season (else the one that started last) and the four arenas, each linking to the contest guide. Signed in: the home (v1.11), a dashboard: the caller's team (the first, for an operator with several) with its rating, deviation and rank in the current season, a sparkline of its rating over the season (walked back from the current rating through each game's `delta`), the change over its last ten games, its won-drawn-lost record and its active bot (or that it has none), with links to `/team` and `/submissions`, or a prompt to create a team; its five latest games; the about links; the four arenas. Both show the live panels as at page load (no script; the page says the time): Now playing, the `match` jobs queued or running (up to six, running first, each as its two teams, the viewer's marked) and when the season's next round is due (its last round plus `KFM_LADDER_ROUND_SECONDS`, said only when known); and Results, the latest games of the whole ladder (five signed out, six signed in), each linking to its page. Shows `?error=<code>` as the code's message (where a failed sign-in, a refused CLI confirmation and a form sent signed out land). |
+| `GET /team` | Signed in (v1.11): the caller's team: its standing in the current season, its members (add member and remove, shown to an owner; leave), rename (shown to an owner, v1.9), its last ten games with links to their pages (v1.2); the create-team form, shown to an account without a team and to an operator (v1.5). |
+| `GET /submissions` | Signed in (v1.11): per team, the upload form and the submissions (state, module hash, error, ranked games and faults, a link to the log, an Activate button on ready ones, the active one marked; v1.1). |
+| `GET /tokens` | With `Accept: text/html` and no `Authorization` header (a browser's navigation; v1.11): the caller's tokens with Revoke, and the create form. Otherwise the JSON of §6, as before. |
+| `GET /account` | Signed in (v1.11): the display name, the user id, the linked providers (a link button for the provider not yet linked), sign out. Shows `?linked=<provider>` as a notice. |
 | `GET /privacy` | The privacy page (v1.4): who runs the service (`KFM_LADDER_CONTACT`), what it stores and why, what it does not, IP addresses, the third parties, how to have data deleted. Public; every portal page's footer links to it. |
 | `GET /docs/contest` | The contest guide (v1.7): the rules of the `contest` mode as an entrant needs them, its arenas drawn, what a bot sees and where each of these is in the observation, and how the ladder plays it. Public. It names the engine release it was written for and says so when the service plays another (`KFM_LADDER_ENGINE_TAG`); the engine's content and its `docs/bot-abi.md` stay normative. |
-| `GET /favicon.svg`, `GET /favicon.ico` | The site's icon (v1.8), the header's mark: `image/svg+xml` and `image/x-icon` (16, 32 and 48 pixels), `Cache-Control: public, max-age=86400`. Public. Every page links both. |
-| `GET /ladder` | With `Accept: text/html` (a browser): the board of §10.5 as a page, paged, with links to every season (v1.2), each team's name linking to its games, and the season's eight latest games (v1.7). |
-| `GET /matches` | With `Accept: text/html` (v1.7): the list of §10.6 as a page, 25 games a page, with the same `team`, `season` and `page` parameters and the same errors. |
-| `GET /matches/{m}` | With `Accept: text/html`: the game's page: both sides with score, kills, deaths, rating change and faults, the replay's download link, the viewer link, the seed and hashes to re-run it, and the raw result (v1.2). |
-| `POST /portal/tokens` | Form `csrf`, `name`, `scope`: creates a token and renders `/` with its secret, once. |
-| `POST /portal/tokens/{id}/revoke` | Form `csrf`. |
-| `POST /portal/teams` | Form `csrf`, `name`. |
-| `POST /portal/teams/{id}/rename` | Form `csrf`, `name` (v1.9). |
-| `POST /portal/teams/{id}/members` | Form `csrf`, `user`. |
-| `POST /portal/teams/{id}/members/{user}/remove` | Form `csrf` (leave when `{user}` is the caller). |
-| `POST /portal/teams/{id}/submissions` | `multipart/form-data`: `csrf`, `language` (`cpp` or `c`), `entry` (empty for `.`) and the file `source.zip`; the manifest is made from the two fields (v1.1). |
-| `POST /portal/teams/{id}/active` | Form `csrf`, `submission` (v1.1). |
+| `GET /favicon.svg`, `GET /favicon.ico` | The site's icon (v1.8), the sidebar's mark: `image/svg+xml` and `image/x-icon` (16, 32 and 48 pixels), `Cache-Control: public, max-age=86400`. Public. Every page links both. |
+| `GET /ladder` | With `Accept: text/html` (a browser): the board of §10.5 as a page, paged, with links to every season (v1.2), each team's name linking to its games, and the season's eight latest games (v1.7). The top three are marked, and so is the signed-in viewer's own team (v1.11). |
+| `GET /matches` | With `Accept: text/html` (v1.7): the list of §10.6 as a page, 25 games a page, with the same `team`, `season` and `page` parameters and the same errors; each filter in force is shown with a link that drops it, and the signed-in viewer's team is marked, with a link to its games (v1.11). |
+| `GET /matches/{m}` | With `Accept: text/html`: the game's page: both sides with score, kills, deaths, rating change and faults, the replay's download link, the viewer link, the seed and hashes to re-run it, and the raw result (v1.2); the arena's drawing when it is one of the contest guide's, and the viewer's own side marked (v1.11). |
+| `POST /portal/tokens` | Form `csrf`, `name`, `scope`: creates a token and renders `/tokens` with its secret, once. |
+| `POST /portal/tokens/{id}/revoke` | Form `csrf`. Back to `/tokens`. |
+| `POST /portal/teams` | Form `csrf`, `name`. Back to `/team`. |
+| `POST /portal/teams/{id}/rename` | Form `csrf`, `name` (v1.9). Back to `/team`. |
+| `POST /portal/teams/{id}/members` | Form `csrf`, `user`. Back to `/team`. |
+| `POST /portal/teams/{id}/members/{user}/remove` | Form `csrf` (leave when `{user}` is the caller). Back to `/team`. |
+| `POST /portal/teams/{id}/submissions` | `multipart/form-data`: `csrf`, `language` (`cpp` or `c`), `entry` (empty for `.`) and the file `source.zip`; the manifest is made from the two fields (v1.1). Back to `/submissions`. |
+| `POST /portal/teams/{id}/active` | Form `csrf`, `submission` (v1.1). Back to `/submissions`. |
 
 Forms are `application/x-www-form-urlencoded` (the upload: `multipart/form-data`),
 authenticated by the session cookie only, and carry the session's CSRF token in `csrf`. Each
-answers `303` to `/` on success and to `/?error=<code>` on failure (the codes of §2;
-`/?error=<code>&detail=<text>` for a refused upload), except a created token, which renders the
-page (`200`). Portal pages are sent with `Cache-Control: no-store`, a `Content-Security-Policy` that
+answers `303` to the page the form lives on (v1.11; `/` before): to that page on success and to
+`<page>?error=<code>` on failure (the codes of §2; `<page>?error=<code>&detail=<text>` for a
+refused upload), except a created token, which renders `/tokens` (`200`), and a form sent
+without a session, which answers `/?error=unauthenticated`. Linking a provider while signed in
+lands on `/account?linked=<provider>` (v1.11; `/?linked=` before); a sign-in that names a `next`
+(§5.1) still returns there. Portal pages are sent with `Cache-Control: no-store`, a `Content-Security-Policy` that
 allows no script and no load but an image from the service itself (the icon, v1.8), `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. The
 `/portal/...` routes are for the portal's own forms; programs use the JSON routes. `GET /ladder`,
-`GET /matches` (v1.7) and `GET /matches/{m}` answer HTML only to a request whose `Accept` header lists `text/html` (what a
-browser's navigation sends); without it, or with `*/*` or `application/json`, they answer the
-JSON of §10, so a link to any of them works for a person and a program alike (v1.2).
+`GET /matches` (v1.7), `GET /matches/{m}` and `GET /tokens` (v1.11) answer HTML only to a request whose `Accept` header lists `text/html` (what a
+browser's navigation sends; for `GET /tokens`, also without an `Authorization` header); without it, or with `*/*` or `application/json`, they answer the
+JSON of §6 and §10, so a link to any of them works for a person and a program alike (v1.2).
 
 ## 9. Submissions
 
@@ -826,6 +842,7 @@ presigned URL, so the bucket must allow that origin's GET (CORS, `deploy/README.
 | v1.8 | The site's icon (§8): `GET /favicon.svg` and `GET /favicon.ico`, linked from every page, whose `Content-Security-Policy` gains `img-src 'self'` for it. |
 | v1.9 | Renaming a team (§7): `PATCH /teams/{id}` with `{"name"}`, an owner through the session, answers the team; the portal's rename form, `POST /portal/teams/{id}/rename` (§8). No key or code is new: a team's `name` may now change, its `id` never does. |
 | v1.10 | Replays by id (§10.6): `GET /matches/{m}/replay` serves the `.kfmr` with `Access-Control-Allow-Origin: *`, under the presigning limit (§2). `viewer_url` keeps its meaning (a link that opens the replay in the game's release) and takes the short form `<viewer>/<tag>/?match=<id>` for a game of engine v0.11.0 or later, whose client fetches that route; earlier releases keep the `?replay=` form. No key or code is new. |
+| v1.11 | The site's shell and the account's pages (§8): every page has a sidebar that knows who is signed in; the signed-in `/` becomes a home, and the account's parts move to `GET /team`, `GET /submissions`, `GET /tokens` (HTML to a browser's navigation, the JSON of §6 otherwise) and `GET /account`, each `303` to `/` when signed out. The `/portal/...` forms keep their paths and fields and return to their own page with `?error=`; linking a provider lands on `/account?linked=`. No JSON route, key or code changed. |
 
 ## 12. Configuration of the binary
 

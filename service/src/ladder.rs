@@ -19,6 +19,7 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::auth::MaybeSession;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::extract::ApiPath;
 use crate::glicko::{self, Rating};
@@ -494,11 +495,12 @@ pub async fn ladder_json(state: &AppState, query: &LadderQuery) -> AppResult<Val
 pub async fn ladder_route(
     State(state): State<AppState>,
     headers: HeaderMap,
+    MaybeSession(session): MaybeSession,
     query: Result<Query<LadderQuery>, QueryRejection>,
 ) -> AppResult<Response> {
     let Query(query) = query.map_err(|_| AppError(ErrorCode::BadRequest))?;
     if wants_html(&headers) {
-        return crate::portal::ladder_page(&state, &query).await;
+        return crate::portal::ladder_page(&state, session.as_ref(), &query).await;
     }
     Ok(Json(ladder_json(&state, &query).await?).into_response())
 }
@@ -541,11 +543,12 @@ pub async fn matches_filter(db: &PgPool, query: &MatchesQuery) -> AppResult<Matc
 pub async fn matches_route(
     State(state): State<AppState>,
     headers: HeaderMap,
+    MaybeSession(session): MaybeSession,
     query: Result<Query<MatchesQuery>, QueryRejection>,
 ) -> AppResult<Response> {
     let Query(query) = query.map_err(|_| AppError(ErrorCode::BadRequest))?;
     if wants_html(&headers) {
-        return crate::portal::matches_page(&state, &query).await;
+        return crate::portal::matches_page(&state, session.as_ref(), &query).await;
     }
     let filter = matches_filter(&state.db, &query).await?;
     let season = filter.season.as_ref().map(|s| s.id);
@@ -565,11 +568,16 @@ pub async fn match_route(
     _quota: PresignQuota,
     State(state): State<AppState>,
     headers: HeaderMap,
+    MaybeSession(session): MaybeSession,
     ApiPath(id): ApiPath<Uuid>,
 ) -> AppResult<Response> {
     let detail = match_detail(&state, id).await?;
     if wants_html(&headers) {
-        return crate::portal::match_page(&detail);
+        let shell =
+            crate::portal::Shell::load(&state.db, session.as_ref(), crate::portal::nav::GAMES)
+                .await?;
+        let mine = crate::portal::viewer_teams(&state.db, session.as_ref()).await?;
+        return crate::portal::match_page(shell, &mine, &detail);
     }
     Ok(Json(detail).into_response())
 }
