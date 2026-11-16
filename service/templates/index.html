@@ -1,137 +1,78 @@
 {% extends "base.html" %}
 {% block page %}pg-home{% endblock %}
 {% block content %}
-{% if let Some(message) = error %}<section class="error" role="alert">{{ message }}</section>{% endif %}
-{% if let Some(message) = notice %}<section class="notice">{{ message }}</section>{% endif %}
-
-{% if let Some(user) = user %}
-<p class="eyebrow">Your portal · engine {{ engine_tag }}</p>
-<h1>Your portal</h1>
-<p class="sub">Your account, tokens, team and submissions. New here? The <a href="/docs/contest">contest guide</a> has the rules, the four arenas and what a bot reads; <a href="https://github.com/minip8/kung-fu-monkeys-bots#quick-start">the quick start</a> gets a bot built and submitted.</p>
-<section>
-  <h2>Signed in as {{ user.name }}</h2>
-  <p class="muted">User id <code>{{ user.id }}</code> (teammates add you by it or by your name).</p>
-  <table>
-    <tr><th>Provider</th><th>Account</th><th></th></tr>
-    {% for p in user.providers %}
-    <tr>
-      <td>{{ p.label }}</td>
-      {% if p.linked %}<td>{{ p.detail }}</td><td class="muted">linked</td>
-      {% else %}<td class="muted">not linked</td><td><a class="button" href="/auth/{{ p.slug }}">Link {{ p.label }}</a></td>{% endif %}
-    </tr>
-    {% endfor %}
-  </table>
-  <form class="row" method="post" action="/auth/logout">
-    <input type="hidden" name="csrf" value="{{ user.csrf }}">
-    <button class="quiet" type="submit">Sign out</button>
-  </form>
-</section>
-
-<section>
-  <h2>API tokens</h2>
-  {% if let Some(t) = new_token %}
-  <div class="notice">New {{ t.scope }} token <strong>{{ t.name }}</strong>. Copy it now: it is not shown again.
-    <code class="secret">{{ t.secret }}</code></div>
-  {% endif %}
-  {% if user.tokens.is_empty() %}<p class="muted">No tokens yet. The <code>kfm</code> command line tool sends one as a bearer.</p>
-  {% else %}
-  <table>
-    <tr><th>Name</th><th>Scope</th><th>Created</th><th>Last used</th><th></th></tr>
-    {% for t in user.tokens %}
-    <tr>
-      <td>{{ t.name }}</td><td>{{ t.scope }}</td><td>{{ t.created }}</td><td>{{ t.last_used }}</td>
-      <td><form class="inline" method="post" action="/portal/tokens/{{ t.id }}/revoke">
-        <input type="hidden" name="csrf" value="{{ user.csrf }}"><button class="quiet" type="submit">Revoke</button></form></td>
-    </tr>
-    {% endfor %}
-  </table>
-  {% endif %}
-  <form class="row" method="post" action="/portal/tokens">
-    <input type="hidden" name="csrf" value="{{ user.csrf }}">
-    <input type="text" name="name" placeholder="Token name (laptop, CI)" maxlength="64" required>
-    <select name="scope"><option value="submit">submit</option><option value="read">read</option></select>
-    <button type="submit">Create token</button>
-  </form>
-</section>
-
-<section>
-  <h2>Teams</h2>
-  <p class="muted">An entrant is a team; a solo player is a team of one. An account is in one team at a time.</p>
-  {% for team in user.teams %}
-  <div class="team">
-    <strong>{{ team.name }}</strong> <span class="muted">(you: {{ team.role }}, id <code>{{ team.id }}</code>)</span>
-    <table>
-      <tr><th>Member</th><th>Role</th><th></th></tr>
-      {% for m in team.members %}
-      <tr>
-        <td>{{ m.name }}</td><td>{{ m.role }}</td>
-        <td>{% if m.is_me %}<form class="inline" method="post" action="/portal/teams/{{ team.id }}/members/{{ m.user_id }}/remove">
-            <input type="hidden" name="csrf" value="{{ user.csrf }}"><button class="quiet" type="submit">Leave</button></form>
-          {% else if team.is_owner %}<form class="inline" method="post" action="/portal/teams/{{ team.id }}/members/{{ m.user_id }}/remove">
-            <input type="hidden" name="csrf" value="{{ user.csrf }}"><button class="quiet" type="submit">Remove</button></form>{% endif %}</td>
-      </tr>
-      {% endfor %}
-    </table>
-    {% if team.is_owner %}
-    <form class="row" method="post" action="/portal/teams/{{ team.id }}/members">
-      <input type="hidden" name="csrf" value="{{ user.csrf }}">
-      <input type="text" name="user" placeholder="User id or name" required>
-      <button type="submit">Add member</button>
-    </form>
-    <form class="row" method="post" action="/portal/teams/{{ team.id }}/rename">
-      <input type="hidden" name="csrf" value="{{ user.csrf }}">
-      <input type="text" name="name" placeholder="New team name (3 to 32 characters)" minlength="3" maxlength="32" required>
-      <button type="submit">Rename team</button>
-    </form>
-    {% endif %}
-    <h3>Ladder</h3>
-    {% if team.rating.is_empty() %}<p class="muted">Not rated in the current season yet: once a ready submission is active, the scheduler pairs the team in its next round.</p>
-    {% else %}<p>{{ team.rating }} <a href="/ladder">ladder</a></p>{% endif %}
-    {% if !team.matches.is_empty() %}
-    <div class="scroll"><table>
-      <tr><th>Played</th><th>Opponent</th><th>Result</th><th class="num">Score</th><th class="num">Rating</th><th></th></tr>
-      {% for m in team.matches %}
-      <tr><td>{{ m.when }}</td><td>{{ m.opponent }}</td><td>{{ m.outcome }}{% if m.faulted %} <span class="bad">fault</span>{% endif %}</td><td class="num">{{ m.score }}</td><td class="num">{{ m.change }}</td><td><a href="/matches/{{ m.id }}">match</a></td></tr>
-      {% endfor %}
-    </table></div>
-    {% endif %}
-    <h3>Submissions</h3>
-    {% if team.submissions.is_empty() %}<p class="muted">No submissions yet.</p>
-    {% else %}
-    <table>
-      <tr><th>Submitted</th><th>State</th><th>Module</th><th></th><th></th></tr>
-      {% for s in team.submissions %}
-      <tr>
-        <td>{{ s.created }}<br><span class="muted">entry {{ s.entry }}</span></td>
-        <td>{{ s.state }}{% if s.is_active %} <strong class="good">active</strong>{% endif %}{% if !s.error.is_empty() %}<br><span class="muted">{{ s.error }}</span>{% endif %}{% if s.ranked_games > 0 %}<br><span class="muted">{{ s.ranked_games }} ranked game(s), {{ s.ranked_faults }} with a fault</span>{% endif %}</td>
-        <td>{% if !s.hash.is_empty() %}<code title="SHA-256 of the module">{{ s.hash }}</code>{% endif %}</td>
-        <td>{% if s.has_log %}<a href="/submissions/{{ s.id }}/log">log</a>{% endif %}</td>
-        <td>{% if s.is_ready && !s.is_active %}<form class="inline" method="post" action="/portal/teams/{{ team.id }}/active">
-            <input type="hidden" name="csrf" value="{{ user.csrf }}"><input type="hidden" name="submission" value="{{ s.id }}">
-            <button class="quiet" type="submit">Activate</button></form>{% endif %}</td>
-      </tr>
-      {% endfor %}
-    </table>
-    {% endif %}
-    <form class="row" method="post" action="/portal/teams/{{ team.id }}/submissions" enctype="multipart/form-data">
-      <input type="hidden" name="csrf" value="{{ user.csrf }}">
-      <select name="language"><option value="cpp">C++</option><option value="c">C</option></select>
-      <input type="text" name="entry" placeholder="Entry directory in the zip (default .)" maxlength="255">
-      <input type="file" name="source.zip" accept=".zip,application/zip" required>
-      <button type="submit">Submit</button>
-    </form>
-    <p class="muted">A zip of the bot's sources (at most 4 MiB), built by the ladder with the pinned toolchain and checked in one match against the reference bot. One submission per team per minute; the five most recent are kept, plus the active one.</p>
+{% if let Some(h) = home %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Home · engine {{ engine_tag }}</p>
+    <h1>Welcome back, {{ h.name }}</h1>
+    <p class="sub">Your team, its standing and its latest games. New here? The <a href="/docs/contest">contest guide</a> has the rules; <a href="https://github.com/minip8/kung-fu-monkeys-bots#quick-start">the quick start</a> gets a bot built and submitted.</p>
   </div>
-  {% endfor %}
-  {% if user.can_create_team %}
-  <form class="row" method="post" action="/portal/teams">
-    <input type="hidden" name="csrf" value="{{ user.csrf }}">
-    <input type="text" name="name" placeholder="New team name (3 to 32 characters)" minlength="3" maxlength="32" required>
-    <button type="submit">Create team</button>
-  </form>
-  {% endif %}
-</section>
+  <div class="page-actions">
+    <a class="button ghost" href="https://kfm.minip8.com">Play the game <svg class="i" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14 14 6M7.5 6H14v6.5"/></svg></a>
+  </div>
+</div>
+{% include "alerts.html" %}
+
+<div class="panels">
+  <section class="panel span-4">
+    <p class="eyebrow"><span class="n">01</span> / Account</p>
+    <h2>{{ h.name }}</h2>
+    <ul class="chips">
+      {% for p in h.linked %}<li class="chip">{{ p }}</li>{% endfor %}
+      <li class="chip"><b>{{ h.tokens }}</b> token{% if h.tokens != 1 %}s{% endif %}</li>
+    </ul>
+    <p class="muted small">User id <code>{{ h.id }}</code></p>
+    <ul class="links">
+      <li><a href="/account">Account <span>providers, sign out</span></a></li>
+      <li><a href="/tokens">API tokens <span>for the kfm CLI</span></a></li>
+    </ul>
+  </section>
+  <section class="panel span-8">
+    <p class="eyebrow"><span class="n">02</span> / Team</p>
+    {% if let Some(t) = h.team %}
+    <div class="head-row"><h2>{{ t.name }}</h2><a href="/team">Manage ↗</a></div>
+    {% if let Some(r) = t.rating %}
+    <div class="stats">
+      <div class="stat big"><b>{{ r.rating }}<small>± {{ r.rd }}</small></b><span>Rating</span></div>
+      <div class="stat big"><b>#{{ r.rank }}</b><span>Rank · {{ r.season }}</span></div>
+      <div class="stat big"><b>{{ r.games }}</b><span>Games</span></div>
+      <div class="stat big"><b>{{ r.wins }}-{{ r.draws }}-{{ r.losses }}</b><span>Won · drawn · lost</span></div>
+    </div>
+    <span class="record" title="{{ r.wins }} won, {{ r.draws }} drawn, {{ r.losses }} lost"><i class="w" style="flex-grow:{{ r.wins }}"></i><i class="d" style="flex-grow:{{ r.draws }}"></i><i class="l" style="flex-grow:{{ r.losses }}"></i></span>
+    {% else %}
+    <p class="muted">Not rated in the current season yet: once a ready submission is active, the scheduler pairs the team in its next round.</p>
+    {% endif %}
+    {% if h.team_count > 1 %}<p class="muted small">You are in {{ h.team_count }} teams; <a href="/team">all of them</a>.</p>{% endif %}
+    {% else %}
+    <h2>No team yet</h2>
+    <p class="muted">An entrant is a team; a solo player is a team of one.{% if h.can_create_team %} Create yours, or ask a teammate to add you by your name.{% endif %}</p>
+    <p><a class="button" href="/team">{% if h.can_create_team %}Create a team{% else %}Your team{% endif %}</a></p>
+    {% endif %}
+  </section>
+  <section class="panel span-8">
+    <p class="eyebrow"><span class="n">03</span> / Recent games</p>
+    {% if let Some(t) = h.team %}
+    <div class="head-row"><h2>Latest games</h2><a href="/matches?team={{ t.id }}">All games ↗</a></div>
+    {% include "team_games.html" %}
+    {% else %}
+    <h2>Latest games</h2>
+    <p class="muted">Your team's games show here.</p>
+    {% endif %}
+  </section>
+  <section class="panel span-4">
+    <p class="eyebrow"><span class="n">04</span> / Next</p>
+    <h2>Keep going</h2>
+    <ul class="links">
+      <li><a href="/submissions">Submit a bot <span>upload, activate</span></a></li>
+      <li><a href="/ladder">The ladder <span>this season</span></a></li>
+      <li><a href="/docs/contest">Contest guide <span>the rules</span></a></li>
+      <li><a href="https://github.com/minip8/kung-fu-monkeys-bots#quick-start">Quick start <span>↗</span></a></li>
+    </ul>
+  </section>
+</div>
 {% else %}
+{% include "alerts.html" %}
 {% if let Some(l) = landing %}
 <div class="hero">
   <div>
@@ -150,21 +91,20 @@
   </figure>
 </div>
 
-<div class="grid4">
-  <section class="beat"><h3>Harvest</h3><p>Trees are the only supply. Each lays a banana on its beat, and stops when its cell is full.</p></section>
-  <section class="beat"><h3>Carry</h3><p>A monkey holds three. The same bananas are its cargo and its weapon: bank the last one and it is unarmed.</p></section>
-  <section class="beat"><h3>Bank</h3><p>Stand in your home zone: one banana banked, one point, every two turns.</p></section>
-  <section class="beat"><h3>Steal and fight</h3><p>An empty home leaks points to raiders. A kill drops the cargo; a perfect dash catch takes the banana out of the air.</p></section>
+<div class="panels">
+  <section class="panel span-3 beat"><p class="eyebrow"><span class="n">01</span> / Harvest</p><h3>Trees are the only supply</h3><p>Each lays a banana on its beat, and stops when its cell is full.</p></section>
+  <section class="panel span-3 beat"><p class="eyebrow"><span class="n">02</span> / Carry</p><h3>Cargo and weapon</h3><p>A monkey holds three. The same bananas are its cargo and its weapon: bank the last one and it is unarmed.</p></section>
+  <section class="panel span-3 beat"><p class="eyebrow"><span class="n">03</span> / Bank</p><h3>One point a banana</h3><p>Stand in your home zone: one banana banked, one point, every two turns.</p></section>
+  <section class="panel span-3 beat"><p class="eyebrow"><span class="n">04</span> / Steal and fight</p><h3>Nothing is safe</h3><p>An empty home leaks points to raiders. A kill drops the cargo; a perfect dash catch takes the banana out of the air.</p></section>
+  <section class="panel span-4"><p class="step-n">Step 1</p><h2>Write</h2><p>A bot is a directory of C++ (or C) sources over a small freestanding SDK. Every tick it reads an observation of what its monkey sees and returns one input: move, aim, dash, throw, call.</p><p class="small muted">Start from <a href="https://github.com/minip8/kung-fu-monkeys-bots/tree/main/examples">the example bots</a>.</p></section>
+  <section class="panel span-4"><p class="step-n">Step 2</p><h2>Test</h2><p>The <code>kfm</code> tool builds your bot exactly as the ladder does and plays it against the reference bots on your machine, with the engine's own headless runner.</p><p class="small muted">Deterministic: every game replays bit for bit.</p></section>
+  <section class="panel span-4"><p class="step-n">Step 3</p><h2>Climb</h2><p>Submit the sources. The ladder builds them in a sandbox, checks the module, and pairs your team {% if l.round_minutes > 0 %}every {{ l.round_minutes }} minutes {% endif %}with teams near its rating.</p><p class="small muted">Glicko-2 ratings, public results, replays you can watch.</p></section>
 </div>
 
-<div class="grid3">
-  <section><div class="step-n">1</div><h2>Write</h2><p>A bot is a directory of C++ (or C) sources over a small freestanding SDK. Every tick it reads an observation of what its monkey sees and returns one input: move, aim, dash, throw, call.</p><p class="small muted">Start from <a href="https://github.com/minip8/kung-fu-monkeys-bots/tree/main/examples">the example bots</a>.</p></section>
-  <section><div class="step-n">2</div><h2>Test</h2><p>The <code>kfm</code> tool builds your bot exactly as the ladder does and plays it against the reference bots on your machine, with the engine's own headless runner.</p><p class="small muted">Deterministic: every game replays bit for bit.</p></section>
-  <section><div class="step-n">3</div><h2>Climb</h2><p>Submit the sources. The ladder builds them in a sandbox, checks the module, and pairs your team {% if l.round_minutes > 0 %}every {{ l.round_minutes }} minutes {% endif %}with teams near its rating.</p><p class="small muted">Glicko-2 ratings, public results, replays you can watch.</p></section>
-</div>
-
-<section>
-  <h2>Quick start</h2>
+<div class="panels">
+  <section class="panel span-12">
+    <p class="eyebrow"><span class="n">05</span> / Quick start</p>
+    <h2>From nothing to a ranked bot</h2>
 <pre><code>uv tool install kfm-cli                 <span class="c"># the PyPI name; the command is kfm (pipx works too)</span>
 git clone --depth 1 https://github.com/minip8/kung-fu-monkeys-bots.git
 cp -r kung-fu-monkeys-bots/examples/starter mybot &amp;&amp; cd mybot
@@ -172,12 +112,11 @@ kfm login                               <span class="c"># the browser confirms; 
 kfm build                               <span class="c"># out/bot.wasm with the ladder's recipe</span>
 kfm test                                <span class="c"># ranked-shape 5v5 games against ref:hard</span>
 kfm submit --wait --activate            <span class="c"># built and validated by the ladder, then your ranked bot</span></code></pre>
-  <p class="muted small">Sign in and create a team here first. Docker is used for the ladder's own build image (or <code>kfm build --local</code> with a clang that targets wasm32). Everything else is in <a href="https://github.com/minip8/kung-fu-monkeys-bots">the repository</a>.</p>
-</section>
-
-<div class="grid2">
-  <section>
-    <div class="head-row"><h2>Top of the ladder</h2><a href="/ladder">Full ladder</a></div>
+    <p class="muted small">Sign in and create a team here first. Docker is used for the ladder's own build image (or <code>kfm build --local</code> with a clang that targets wasm32). Everything else is in <a href="https://github.com/minip8/kung-fu-monkeys-bots">the repository</a>.</p>
+  </section>
+  <section class="panel span-6">
+    <p class="eyebrow"><span class="n">06</span> / Rankings</p>
+    <div class="head-row"><h2>Top of the ladder</h2><a href="/ladder">Full ladder ↗</a></div>
     {% if l.top.is_empty() %}<p class="muted">No team has played in this season yet. Be the first.</p>
     {% else %}
     <table>
@@ -188,8 +127,9 @@ kfm submit --wait --activate            <span class="c"># built and validated by
     </table>
     {% endif %}
   </section>
-  <section>
-    <div class="head-row"><h2>Latest games</h2><a href="/matches">All games</a></div>
+  <section class="panel span-6">
+    <p class="eyebrow"><span class="n">07</span> / Games</p>
+    <div class="head-row"><h2>Latest games</h2><a href="/matches">All games ↗</a></div>
     {% if l.games.is_empty() %}<p class="muted">No game has been played yet.</p>
     {% else %}
     {% for g in l.games %}{% include "game_line.html" %}{% endfor %}

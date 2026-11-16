@@ -520,8 +520,7 @@ async fn the_portal_shows_a_teams_standing_and_recent_games(pool: PgPool) {
     };
     let won = db_match(&pool, season.id, &me, &them, true, 3).await;
     let lost = db_match(&pool, season.id, &them, &me, true, 2).await;
-    let response = browser.get("/").await;
-    let html = response.text().await.unwrap();
+    let html = browser.get("/team").await.text().await.unwrap();
     assert!(
         html.contains("Season Now: rank 1, rating 1612 ± 91, 2 game(s): 1 won, 0 drawn, 1 lost."),
         "{html}"

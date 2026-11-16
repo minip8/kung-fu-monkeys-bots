@@ -103,7 +103,7 @@ pub fn routes() -> Router<AppState> {
             get(ladder::replay_route).layer(axum::middleware::map_response(ladder::replay_cors)),
         )
         .route("/me", get(users::me))
-        .route("/tokens", get(tokens::list).post(tokens::create))
+        .route("/tokens", get(portal::tokens_route).post(tokens::create))
         .route("/tokens/{id}", delete(tokens::revoke))
         .route("/teams", get(teams::list_mine).post(teams::create))
         .route("/teams/{id}", get(teams::show).patch(teams::rename_route))

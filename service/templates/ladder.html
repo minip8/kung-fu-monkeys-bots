@@ -2,17 +2,23 @@
 {% block title %}Kung Fu Monkeys ladder: {{ title }}{% endblock %}
 {% block page %}pg-ladder{% endblock %}
 {% block content %}
-<p class="eyebrow">Glicko-2 · engine {{ engine_tag }}</p>
-<h1>Ladder</h1>
-{% if let Some(season) = season %}
-<p class="sub">Season <strong>{{ season.name }}</strong>, {{ season.window }}{% if season.current %} (current){% else %} (frozen at its end){% endif %}, mode <code>{{ season.mode }}</code>. Glicko-2 ratings with their deviation; engine release {{ engine_tag }}.</p>
-{% else %}
-<p class="sub">No season has begun yet.</p>
-{% endif %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Compete · Glicko-2 · engine {{ engine_tag }}</p>
+    <h1>Ladder</h1>
+    {% if let Some(season) = season %}
+    <p class="sub">Season <strong>{{ season.name }}</strong>, {{ season.window }}{% if season.current %} (current){% else %} (frozen at its end){% endif %}, mode <code>{{ season.mode }}</code>. Glicko-2 ratings with their deviation; engine release {{ engine_tag }}.</p>
+    {% else %}
+    <p class="sub">No season has begun yet.</p>
+    {% endif %}
+  </div>
+  <div class="page-actions"><a class="button ghost" href="{{ games_url }}">All games</a></div>
+</div>
 {% if seasons.len() > 1 %}
 <p class="seasons">Seasons: {% for s in seasons %}{% if s.selected %}<strong>{{ s.name }}</strong>{% else %}<a href="/ladder?season={{ s.query }}">{{ s.name }}</a>{% endif %}{% endfor %}</p>
 {% endif %}
 <section>
+<p class="eyebrow"><span class="n">01</span> / Board</p>
 {% if rows.is_empty() %}<p class="muted">No team has played in this season yet.</p>
 {% else %}
 <div class="scroll"><table>
@@ -26,6 +32,7 @@
 </section>
 {% if !games.is_empty() %}
 <section>
+  <p class="eyebrow"><span class="n">02</span> / Games</p>
   <div class="head-row"><h2>Latest games</h2><a href="{{ games_url }}">All games</a></div>
   {% for g in games %}{% include "game_line.html" %}{% endfor %}
 </section>

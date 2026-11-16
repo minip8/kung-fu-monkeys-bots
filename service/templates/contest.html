@@ -2,9 +2,14 @@
 {% block title %}The contest: Kung Fu Monkeys bot ladder{% endblock %}
 {% block page %}pg-guide{% endblock %}
 {% block content %}
-<p class="eyebrow">Contest guide · engine {{ guide_tag }}</p>
-<h1>The contest: bananas are the economy</h1>
-<p class="sub">Everything the ladder's game mode asks of a bot: how a game is won, where bananas come from, what a monkey can do and see, the four arenas, and where each of those is in the observation. The mode is the engine's <code>contest</code> row, of the <code>harvest</code> kind.</p>
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Info · contest guide · engine {{ guide_tag }}</p>
+    <h1>The contest: bananas are the economy</h1>
+    <p class="sub">Everything the ladder's game mode asks of a bot: how a game is won, where bananas come from, what a monkey can do and see, the four arenas, and where each of those is in the observation. The mode is the engine's <code>contest</code> row, of the <code>harvest</code> kind.</p>
+  </div>
+  <div class="page-actions"><a class="button ghost" href="https://kfm.minip8.com">Play the game <svg class="i" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14 14 6M7.5 6H14v6.5"/></svg></a></div>
+</div>
 {% if stale %}
 <section class="notice">The ladder now plays engine release {{ engine_tag }}. This guide was written for {{ guide_tag }}: the rules are the same in kind, but check the numbers against that release's <a href="https://github.com/minip8/kung-fu-monkeys/blob/{{ engine_tag }}/content/modes.toml"><code>content/modes.toml</code></a>.</section>
 {% endif %}

@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Team: Kung Fu Monkeys bot ladder{% endblock %}
+{% block page %}pg-team{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Compete · team</p>
+    <h1>{% if teams.len() == 1 %}{% for t in teams %}{{ t.name }}{% endfor %}{% else %}Your team{% endif %}</h1>
+    <p class="sub">An entrant is a team; a solo player is a team of one. An account is in one team at a time. Its active submission plays for it on the <a href="/ladder">ladder</a>.</p>
+  </div>
+  <div class="page-actions">
+    <a class="button ghost" href="/submissions">Submissions</a>
+  </div>
+</div>
+{% include "alerts.html" %}
+
+{% for t in teams %}
+{% if teams.len() > 1 %}<h2>{{ t.name }}</h2>{% endif %}
+<div class="panels">
+  <section class="panel span-4">
+    <p class="eyebrow"><span class="n">01</span> / Standing</p>
+    {% if let Some(r) = t.rating %}
+    <h2>Season {{ r.season }}</h2>
+    <div class="stats">
+      <div class="stat big"><b>#{{ r.rank }}</b><span>Rank</span></div>
+      <div class="stat big"><b>{{ r.rating }}<small>± {{ r.rd }}</small></b><span>Rating</span></div>
+    </div>
+    <span class="record" title="{{ r.wins }} won, {{ r.draws }} drawn, {{ r.losses }} lost"><i class="w" style="flex-grow:{{ r.wins }}"></i><i class="d" style="flex-grow:{{ r.draws }}"></i><i class="l" style="flex-grow:{{ r.losses }}"></i></span>
+    <p class="muted small" style="margin-top:12px">{{ r.line }}</p>
+    {% else %}
+    <h2>Not rated yet</h2>
+    <p class="muted">Not rated in the current season yet: once a ready submission is active, the scheduler pairs the team in its next round.</p>
+    {% endif %}
+    <ul class="chips">
+      <li class="chip">you: <b>{{ t.role }}</b></li>
+      <li class="chip">{{ t.members.len() }} member{% if t.members.len() != 1 %}s{% endif %}</li>
+    </ul>
+    <p class="muted small">Team id <code>{{ t.id }}</code></p>
+  </section>
+  <section class="panel span-8">
+    <p class="eyebrow"><span class="n">02</span> / Members</p>
+    <h2>Members</h2>
+    <div class="scroll"><table>
+      <tr><th>Member</th><th>Role</th><th></th></tr>
+      {% for m in t.members %}
+      <tr{% if m.is_me %} class="me"{% endif %}>
+        <td class="team">{{ m.name }}{% if m.is_me %} <span class="muted">(you)</span>{% endif %}</td><td>{{ m.role }}</td>
+        <td class="act">{% if m.is_me %}<form class="inline" method="post" action="/portal/teams/{{ t.id }}/members/{{ m.user_id }}/remove">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger" type="submit">Leave</button></form>
+          {% else if t.is_owner %}<form class="inline" method="post" action="/portal/teams/{{ t.id }}/members/{{ m.user_id }}/remove">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger" type="submit">Remove</button></form>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table></div>
+    {% if t.is_owner %}
+    <form class="row" method="post" action="/portal/teams/{{ t.id }}/members">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="text" name="user" placeholder="User id or name" aria-label="User id or name" required>
+      <button type="submit">Add member</button>
+    </form>
+    <form class="row" method="post" action="/portal/teams/{{ t.id }}/rename">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="text" name="name" placeholder="New team name (3 to 32 characters)" aria-label="New team name" minlength="3" maxlength="32" required>
+      <button class="quiet" type="submit">Rename team</button>
+    </form>
+    {% endif %}
+  </section>
+  <section class="panel span-12">
+    <p class="eyebrow"><span class="n">03</span> / Games</p>
+    <div class="head-row"><h2>Last ten games</h2><a href="/matches?team={{ t.id }}">All games ↗</a></div>
+    {% include "team_games.html" %}
+  </section>
+</div>
+{% endfor %}
+
+{% if can_create_team %}
+<div class="panels">
+  <section class="panel span-12">
+    <p class="eyebrow"><span class="n">{% if teams.is_empty() %}01{% else %}04{% endif %}</span> / New team</p>
+    <h2>{% if teams.is_empty() %}Create your team{% else %}Create another team{% endif %}</h2>
+    <p class="muted">{% if teams.is_empty() %}You are not in a team yet. Create one (you become its owner), or ask a team's owner to add you by your name or user id <code>{{ user_id }}</code>.{% else %}Operators may own several teams (the house teams).{% endif %}</p>
+    <form class="row" method="post" action="/portal/teams">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="text" name="name" placeholder="New team name (3 to 32 characters)" aria-label="New team name" minlength="3" maxlength="32" required>
+      <button type="submit">Create team</button>
+    </form>
+  </section>
+</div>
+{% endif %}
+{% endblock %}

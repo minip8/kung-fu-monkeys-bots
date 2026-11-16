@@ -2,9 +2,14 @@
 {% block title %}Kung Fu Monkeys ladder: {{ title }}{% endblock %}
 {% block page %}pg-games{% endblock %}
 {% block content %}
-<p class="eyebrow">Ranked game</p>
-<h1>{{ title }}</h1>
-<p class="sub">{% if !season.is_empty() %}Season {{ season }}, {% endif %}{% if !round.is_empty() %}round {{ round }}, {% endif %}{% if game > 1 %}game {{ game }} of its pair, {% endif %}{% if !arena.is_empty() %}on <code>{{ arena }}</code>, {% endif %}played {{ when }} with engine release <code>{{ engine_tag }}</code>.</p>
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Compete · ranked game</p>
+    <h1>{{ title }}</h1>
+    <p class="sub">{% if !season.is_empty() %}Season {{ season }}, {% endif %}{% if !round.is_empty() %}round {{ round }}, {% endif %}{% if game > 1 %}game {{ game }} of its pair, {% endif %}{% if !arena.is_empty() %}on <code>{{ arena }}</code>, {% endif %}played {{ when }} with engine release <code>{{ engine_tag }}</code>.</p>
+  </div>
+  {% if let Some(viewer) = viewer_url %}<div class="page-actions"><a class="button ghost" href="{{ viewer }}">Watch the replay <svg class="i" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 14 14 6M7.5 6H14v6.5"/></svg></a></div>{% endif %}
+</div>
 <div class="score">
   {% for s in sides %}
   {% if loop.index0 == 1 %}<div class="pts">{{ score_a }}<span>:</span>{{ score_b }}</div>{% endif %}

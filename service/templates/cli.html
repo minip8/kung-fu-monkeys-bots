@@ -2,8 +2,13 @@
 {% block title %}Authorize the kfm CLI{% endblock %}
 {% block page %}pg-narrow{% endblock %}
 {% block content %}
-<h1>Log in the kfm command line tool</h1>
-<p class="sub">You came here from <code>kfm login</code> on a computer of yours.</p>
+<div class="page-head">
+  <div>
+    <p class="eyebrow">kfm login</p>
+    <h1>Log in the kfm command line tool</h1>
+    <p class="sub">You came here from <code>kfm login</code> on a computer of yours.</p>
+  </div>
+</div>
 
 {% if let Some(message) = error %}<section class="error" role="alert">{{ message }}</section>{% endif %}
 
@@ -21,7 +26,7 @@
   <p>Signed in as <strong>{{ c.user }}</strong>. It creates a <code>submit</code> token named
     <strong>'{{ c.token_name }}'</strong> and hands it to the <code>kfm</code> listening on this computer
     (port {{ c.port }}), which stores it in its config file. The token can upload and activate your
-    teams' bots; revoke it on the <a href="/">portal</a> at any time, or with <code>kfm logout</code>.</p>
+    teams' bots; revoke it on the <a href="/tokens">API tokens</a> page at any time, or with <code>kfm logout</code>.</p>
   <p class="muted">Only continue if you ran <code>kfm login</code> yourself just now.</p>
   <form class="row" method="post" action="/auth/cli">
     <input type="hidden" name="csrf" value="{{ c.csrf }}">

@@ -2,9 +2,14 @@
 {% block title %}Kung Fu Monkeys ladder: {{ title }}{% endblock %}
 {% block page %}pg-games{% endblock %}
 {% block content %}
-<p class="eyebrow">Ranked games</p>
-<h1>{{ title }}</h1>
-<p class="sub">{% if let Some(team) = team %}The games of <strong>{{ team }}</strong>{% else %}Every ranked game{% endif %}{% if let Some(season) = season %} of season <strong>{{ season }}</strong>{% endif %}, newest first. A game's page has its replay and its result. {% if filtered %}<a href="/matches">Every game</a>{% endif %}</p>
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Compete · ranked games</p>
+    <h1>{{ title }}</h1>
+    <p class="sub">{% if let Some(team) = team %}The games of <strong>{{ team }}</strong>{% else %}Every ranked game{% endif %}{% if let Some(season) = season %} of season <strong>{{ season }}</strong>{% endif %}, newest first. A game's page has its replay and its result. {% if filtered %}<a href="/matches">Every game</a>{% endif %}</p>
+  </div>
+  <div class="page-actions"><a class="button ghost" href="/ladder">Ladder</a></div>
+</div>
 <section>
 {% if games.is_empty() %}<p class="muted">No game here yet.</p>
 {% else %}
