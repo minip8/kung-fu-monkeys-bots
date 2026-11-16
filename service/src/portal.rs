@@ -38,7 +38,7 @@ const LADDER_GAMES: i64 = 8;
 /// arena drawings (`templates/maps/`, `tools/contest_maps.py`) describe. A
 /// test holds it to `engine.lock`'s `tag=`, so an engine bump stops here
 /// until the guide has been read against the new release's content.
-pub const CONTEST_GUIDE_ENGINE: &str = "v0.10.0";
+pub const CONTEST_GUIDE_ENGINE: &str = "v0.11.0";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
