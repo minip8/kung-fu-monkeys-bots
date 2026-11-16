@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
-use axum::http::header::ACCEPT;
-use axum::http::HeaderMap;
+use axum::http::header::{ACCEPT, ACCESS_CONTROL_ALLOW_ORIGIN, CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -364,10 +364,47 @@ pub async fn list_matches(
     ))
 }
 
-/// The viewer link of a replay: `<viewer>/<tag>/?replay=<url, encoded>`.
-pub fn viewer_url(viewer: &str, tag: &str, replay_url: &str) -> String {
+/// The first engine release whose client opens `?match=<id>`: it fetches
+/// the replay from `GET /matches/{m}/replay` itself (v1.10). An older client
+/// exits on the unknown `--match` flag, so its games keep the `?replay=` link.
+pub const MATCH_VIEWER_SINCE: &str = "v0.11.0";
+
+/// The largest replay `GET /matches/{m}/replay` serves: the engine viewer's
+/// cap (`kReplayMaxBytes`, 16 MiB).
+pub const REPLAY_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+/// `vMAJOR.MINOR.PATCH` as numbers; `None` for anything else (a suffix too).
+pub fn parse_tag(tag: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = tag.strip_prefix('v')?.split('.');
+    let mut next = || -> Option<u64> {
+        let part = parts.next()?;
+        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        part.parse().ok()
+    };
+    let version = (next()?, next()?, next()?);
+    parts.next().is_none().then_some(version)
+}
+
+/// Whether the client of `tag` opens `?match=` ([`MATCH_VIEWER_SINCE`]).
+pub fn opens_match_links(tag: &str) -> bool {
+    match (parse_tag(tag), parse_tag(MATCH_VIEWER_SINCE)) {
+        (Some(version), Some(since)) => version >= since,
+        _ => false,
+    }
+}
+
+/// The viewer link of a replay: `<viewer>/<tag>/?match=<id>` for a release
+/// that opens match links ([`opens_match_links`]), else
+/// `<viewer>/<tag>/?replay=<presigned url, encoded>`.
+pub fn viewer_url(viewer: &str, tag: &str, id: Uuid, replay_url: &str) -> String {
+    let viewer = viewer.trim_end_matches('/');
+    if opens_match_links(tag) {
+        return format!("{viewer}/{tag}/?match={id}");
+    }
     let encoded: String = url::form_urlencoded::byte_serialize(replay_url.as_bytes()).collect();
-    format!("{}/{tag}/?replay={encoded}", viewer.trim_end_matches('/'))
+    format!("{viewer}/{tag}/?replay={encoded}")
 }
 
 /// One recorded game with its result and fresh replay links.
@@ -393,7 +430,7 @@ pub async fn match_detail(state: &AppState, id: Uuid) -> AppResult<MatchDetail> 
     };
     let viewer_url = replay_url
         .as_deref()
-        .map(|u| viewer_url(&state.config.viewer_url, &row.engine_tag, u));
+        .map(|u| viewer_url(&state.config.viewer_url, &row.engine_tag, id, u));
     Ok(MatchDetail {
         summary: row.summary(),
         content_hash: row.content_hash.clone(),
@@ -537,6 +574,60 @@ pub async fn match_route(
     Ok(Json(detail).into_response())
 }
 
+/// `GET /matches/{m}/replay` (auth: none, v1.10): the game's `.kfmr`, read
+/// from the store and served from here, so the engine's page fetches it by
+/// the match id alone (`?match=<id>`) and the link never expires while the
+/// replay is kept. Not a redirect to a presigned URL: a cross-origin
+/// redirect taints the request's origin, which the bucket's CORS rule would
+/// not match. Every answer, errors and the quota's 429 too, carries
+/// `Access-Control-Allow-Origin: *` ([`replay_cors`]): the replay is public
+/// and the request carries no credentials. `404 not_found` for an unknown
+/// game and once its replay is pruned. Under the presigning limit, as it
+/// reads the store.
+pub async fn replay_route(
+    _quota: PresignQuota,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+) -> AppResult<Response> {
+    let key: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT replay_key FROM matches WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
+    let key = key
+        .and_then(|(key,)| key)
+        .ok_or(AppError(ErrorCode::NotFound))?;
+    let bytes = state
+        .store
+        .get(&key)
+        .await
+        .map_err(AppError::internal)?
+        .ok_or(AppError(ErrorCode::NotFound))?;
+    if bytes.len() > REPLAY_MAX_BYTES {
+        return Err(AppError::internal(format_args!(
+            "replay {key} is {} bytes, over the viewer's cap",
+            bytes.len()
+        )));
+    }
+    Ok((
+        [
+            (CONTENT_TYPE, "application/octet-stream"),
+            (CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+/// The replay route's layer: `Access-Control-Allow-Origin: *` on every
+/// answer, so the page sees an error's status as well as the bytes.
+pub async fn replay_cors(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -560,15 +651,48 @@ mod tests {
 
     #[test]
     fn the_viewer_link_names_the_release_and_encodes_the_replay() {
-        let url = viewer_url(
-            "https://kfm.minip8.com/",
-            "v0.5.1",
-            "https://r2.example/kfm/replays/x.kfmr?X-Amz-Signature=a&b=c",
-        );
-        assert_eq!(
-            url,
-            "https://kfm.minip8.com/v0.5.1/?replay=https%3A%2F%2Fr2.example%2Fkfm%2Freplays%2Fx.kfmr%3FX-Amz-Signature%3Da%26b%3Dc"
-        );
+        let id = Uuid::parse_str("0190f0f0-1c2d-7a00-8000-0123456789ab").unwrap();
+        let replay = "https://r2.example/kfm/replays/x.kfmr?X-Amz-Signature=a&b=c";
+        let long = "?replay=https%3A%2F%2Fr2.example%2Fkfm%2Freplays%2Fx.kfmr%3FX-Amz-Signature%3Da%26b%3Dc";
+        // A release before MATCH_VIEWER_SINCE: the presigned URL, encoded.
+        for tag in ["v0.5.1", "v0.10.0", "v0.10.9"] {
+            assert_eq!(
+                viewer_url("https://kfm.minip8.com/", tag, id, replay),
+                format!("https://kfm.minip8.com/{tag}/{long}")
+            );
+        }
+        // From it on: the match id alone.
+        for tag in ["v0.11.0", "v0.11.2", "v0.12.0", "v1.0.0"] {
+            assert_eq!(
+                viewer_url("https://kfm.minip8.com/", tag, id, replay),
+                format!("https://kfm.minip8.com/{tag}/?match={id}")
+            );
+        }
+        // A tag that is not vX.Y.Z keeps the long form.
+        for tag in ["v0.11", "0.11.0", "v0.11.0-rc1", "v0.11.0.1", "v0.x.0", ""] {
+            assert_eq!(
+                viewer_url("https://kfm.minip8.com", tag, id, replay),
+                format!("https://kfm.minip8.com/{tag}/{long}"),
+                "{tag}"
+            );
+        }
+    }
+
+    #[test]
+    fn tags_parse_as_three_numbers() {
+        assert_eq!(parse_tag("v0.11.0"), Some((0, 11, 0)));
+        assert_eq!(parse_tag("v10.2.33"), Some((10, 2, 33)));
+        assert_eq!(parse_tag(MATCH_VIEWER_SINCE), Some((0, 11, 0)));
+        for bad in [
+            "v0.11",
+            "v0.11.0-rc1",
+            "v+1.0.0",
+            "v0..1",
+            "v1.2.3.4",
+            "1.2.3",
+        ] {
+            assert_eq!(parse_tag(bad), None, "{bad}");
+        }
     }
 
     #[test]

@@ -14,7 +14,8 @@ pub const DEFAULT_GITHUB_AUTH_URL: &str = "https://github.com/login/oauth/author
 pub const DEFAULT_GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 pub const DEFAULT_GITHUB_API_URL: &str = "https://api.github.com";
 pub const DEFAULT_GOOGLE_ISSUER: &str = "https://accounts.google.com";
-/// The engine's page: `<viewer>/<tag>/?replay=<url>` opens a replay in the
+/// The engine's page: `<viewer>/<tag>/?match=<id>` (or `?replay=<url>` for a
+/// release before `ladder::MATCH_VIEWER_SINCE`) opens a replay in the
 /// client of the match's release (architecture v0.59).
 pub const DEFAULT_VIEWER_URL: &str = "https://kfm.minip8.com";
 /// Who the privacy page names as the operator's contact.
@@ -97,7 +98,8 @@ pub struct Config {
     /// (default 3).
     pub round_opponents: usize,
     /// `KFM_LADDER_VIEWER_URL`: the origin of the engine's page, whose
-    /// `/<tag>/?replay=<url>` plays a replay (default https://kfm.minip8.com).
+    /// `/<tag>/?match=<id>` (`?replay=<url>` before engine v0.11.0) plays a
+    /// replay (default https://kfm.minip8.com).
     pub viewer_url: String,
     /// `KFM_LADDER_REPLAY_HOURS`: a game's replay object is deleted once the
     /// game is this many hours old (default 24); 0 keeps replays forever.

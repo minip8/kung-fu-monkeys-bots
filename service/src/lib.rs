@@ -98,6 +98,10 @@ pub fn routes() -> Router<AppState> {
         .route("/ladder", get(ladder::ladder_route))
         .route("/matches", get(ladder::matches_route))
         .route("/matches/{id}", get(ladder::match_route))
+        .route(
+            "/matches/{id}/replay",
+            get(ladder::replay_route).layer(axum::middleware::map_response(ladder::replay_cors)),
+        )
         .route("/me", get(users::me))
         .route("/tokens", get(tokens::list).post(tokens::create))
         .route("/tokens/{id}", delete(tokens::revoke))
