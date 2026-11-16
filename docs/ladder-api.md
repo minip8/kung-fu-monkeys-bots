@@ -1,4 +1,4 @@
-# Kung Fu Monkeys ladder API v1.9
+# Kung Fu Monkeys ladder API v1.10
 
 Status: normative, append-only from v1.0 (2026-11-07, M7 step 3a, engine architecture v0.63);
 v1.1 (2026-11-07, M7 step 3b) serves submissions; v1.2 (2026-11-07, M7 step 4) serves seasons,
@@ -10,11 +10,12 @@ engine architecture v0.78) holds an account to one team, an operator's excepted 
 from its seed, and names a game's arena (§10.3, §10.6); v1.7 (2026-11-14) is the site: a
 landing page, the contest guide and the games as a page (§8), with no JSON route changed;
 v1.8 (2026-11-14) serves the site's icon (§8); v1.9 (2026-11-14) lets an owner rename a team
-(§7).
+(§7); v1.10 (2026-11-16) serves a game's replay by its id and gives games played under
+engine v0.11.0 or later a short viewer link (§10.6).
 The design and its rationale are the engine's `docs/architecture.md` §8 "The ladder" and §11
 "M7 step 3 design". This file is the HTTP surface shared by the service (`service/`, the
 `kfm-ladder` binary), its portal and the `kfm` command line tool; change it here first. Every
-route below is served as of v1.9.
+route below is served as of v1.10.
 
 ## 1. Transport and conventions
 
@@ -83,8 +84,9 @@ detail, as in `The source archive is refused: "../x.c" contains a .. component.`
 display text, not a contract.
 
 **The presigning limit (v1.4).** The routes that hand out presigned object store URLs,
-`GET /matches/{m}` (§10.6, its JSON and its HTML page alike) and `GET /submissions/{s}`
-(§9.5), share one token bucket per client IP: `KFM_LADDER_PRESIGN_PER_MINUTE` requests a minute
+`GET /matches/{m}` (§10.6, its JSON and its HTML page alike), `GET /matches/{m}/replay`
+(§10.6, v1.10: it reads the store rather than presigning, but costs the same) and
+`GET /submissions/{s}` (§9.5), share one token bucket per client IP: `KFM_LADDER_PRESIGN_PER_MINUTE` requests a minute
 (default 60; 0 turns the limit off), refilled continuously at that rate, so a burst of 60 is
 allowed and then one a second. A request without a token answers `429` with the error shape
 (`{"error":"rate_limited","message":…}`, JSON even where the route would answer HTML) and a
@@ -730,7 +732,7 @@ number, or `null` on the last.
 | `active` | id or null | always | The team's active submission now (not necessarily the one that played every game). |
 | `module_hash` | string or null | always | The active submission's module SHA-256 (64 hex digits). |
 
-### 10.6 Matches: `GET /matches?team=<t>&season=<name>&page=<n>` and `GET /matches/{m}`
+### 10.6 Matches: `GET /matches?team=<t>&season=<name>&page=<n>`, `GET /matches/{m}` and `GET /matches/{m}/replay`
 
 A **match** is one recorded game. `GET /matches` lists them newest first, 25 a page, of every
 team and season unless `team` (an id, either side; `bad_request` if not a UUID) or `season` (a
@@ -765,10 +767,21 @@ match object:
 | `content_hash`, `build_hash` | string, string or null | always | The result's two hashes (8 hex digits). |
 | `result` | object | always | The match object `kfm_arena` printed, whole (the engine's `docs/arena-result.md`; its specs are `<submission>.wasm`). |
 | `replay_url` | string or null | always | A presigned URL of the `.kfmr` on the object store, valid for one hour from the response; `null` once the replay is pruned, 24 hours after the game by default (below, v1.4). |
-| `viewer_url` | string or null | always | `<KFM_LADDER_VIEWER_URL>/<engine_tag>/?replay=<replay_url, URL-encoded>`: the replay in the client of the game's own release (`https://kfm.minip8.com/v0.5.1/?replay=…`); `null` when `replay_url` is. |
+| `viewer_url` | string or null | always | A link that opens the replay in the client of the game's own release; `null` when `replay_url` is. For a game whose `engine_tag` is v0.11.0 or later (`vMAJOR.MINOR.PATCH` compared as numbers) it is `<KFM_LADDER_VIEWER_URL>/<engine_tag>/?match=<id>` (v1.10: that client fetches `GET /matches/{m}/replay` itself, so the link lasts as long as the replay); for an earlier release, or a tag of any other shape, `<KFM_LADDER_VIEWER_URL>/<engine_tag>/?replay=<replay_url, URL-encoded>` (`https://kfm.minip8.com/v0.5.1/?replay=…`), which expires with `replay_url`. Treat it as an opaque link. |
 
 `GET /matches/{m}` is under the presigning limit (§2, v1.4): `429 rate_limited` with
 `Retry-After`, for its HTML page too.
+
+`GET /matches/{m}/replay` (auth: none, v1.10): `200`, the game's `.kfmr` itself, read from the
+object store and sent from the service (`Content-Type: application/octet-stream`,
+`Cache-Control: public, max-age=3600`); `not_found` for an unknown game and once its replay is
+pruned. Every answer of the route, its errors and `429` included, carries
+`Access-Control-Allow-Origin: *`: a replay is public, the request carries no credentials, and
+the engine's page reads the status of an error as well as the bytes. It is the route a
+`?match=<id>` viewer link fetches. It is not a redirect to `replay_url`: a cross-origin redirect
+sends the object store a request whose `Origin` is `null`, which the bucket's CORS rule for the
+engine's page does not allow. It is under the presigning limit (§2). A replay is at most 16 MiB,
+the engine viewer's cap; a larger object answers `internal`.
 
 **Replay retention (v1.4).** A replay is kept for `KFM_LADDER_REPLAY_HOURS` after its game
 was recorded (default 24; 0 keeps replays forever). The match itself is kept forever: its
@@ -786,8 +799,9 @@ want to keep (`kfm replay get`, or the link) within the day.
 The viewer itself is the browser client's replay-by-URL feature (the engine's M7 step 6,
 architecture v0.68): the page of an engine release after v0.5.1 plays the replay. v0.5.1's page
 predates the viewer, so a link for a game played under v0.5.1 opens a page whose client stops
-on the unknown `--replay` argument. The client fetches the replay from the object store's
-presigned URL, so the bucket must allow that origin's GET (CORS, `deploy/README.md`).
+on the unknown `--replay` argument. A `?replay=` link's client fetches the replay from the object store's
+presigned URL, so the bucket must allow that origin's GET (CORS, `deploy/README.md`); a
+`?match=` link's (engine v0.11.0 on, v1.10) fetches it from `GET /matches/{m}/replay` here.
 
 ## 11. Versioning
 
@@ -811,6 +825,7 @@ presigned URL, so the bucket must allow that origin's GET (CORS, `deploy/README.
 | v1.7 | The site (§8): `GET /` signed out is a landing page; `GET /docs/contest`, the contest guide; `GET /matches` answers HTML to a browser as `GET /ladder` and `GET /matches/{m}` do, and the board's page lists the season's latest games. No JSON route, key or code changed. |
 | v1.8 | The site's icon (§8): `GET /favicon.svg` and `GET /favicon.ico`, linked from every page, whose `Content-Security-Policy` gains `img-src 'self'` for it. |
 | v1.9 | Renaming a team (§7): `PATCH /teams/{id}` with `{"name"}`, an owner through the session, answers the team; the portal's rename form, `POST /portal/teams/{id}/rename` (§8). No key or code is new: a team's `name` may now change, its `id` never does. |
+| v1.10 | Replays by id (§10.6): `GET /matches/{m}/replay` serves the `.kfmr` with `Access-Control-Allow-Origin: *`, under the presigning limit (§2). `viewer_url` keeps its meaning (a link that opens the replay in the game's release) and takes the short form `<viewer>/<tag>/?match=<id>` for a game of engine v0.11.0 or later, whose client fetches that route; earlier releases keep the `?replay=` form. No key or code is new. |
 
 ## 12. Configuration of the binary
 
