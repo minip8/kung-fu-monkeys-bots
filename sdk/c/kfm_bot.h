@@ -139,7 +139,8 @@ enum {
   KFM_MODE_HILL = 5,
   KFM_MODE_CAPTURE = 6,
   KFM_MODE_CONTROL = 7, /* architecture v0.80 */
-  KFM_MODE_HARVEST = 8  /* architecture v0.82: bank bananas in the home zone */
+  KFM_MODE_HARVEST = 8, /* architecture v0.82: bank bananas in the home zone */
+  KFM_MODE_KILL_ROUNDS = 9 /* architecture v0.90: rounds scored by eliminations */
 };
 enum {
   KFM_ABILITY_NONE = 0,
